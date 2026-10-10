@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
     private LinearLayout overviewRow;
     private final SimCard[] sims = new SimCard[2];
     private LinearLayout debugBox;
+    private TextView bandReport, hardwareReport;
     private boolean expanded = false;
     private boolean receiverRegistered = false;
     private final BroadcastReceiver updates = new BroadcastReceiver() {
@@ -45,6 +46,8 @@ public class MainActivity extends Activity {
             if (raw == null) raw = "电话进程未提供状态数据";
             details.setText(raw);
             showStatus(raw);
+            updateBands(raw);
+            updateHardware(raw);
         }
     };
 
@@ -96,8 +99,9 @@ public class MainActivity extends Activity {
         root.addView(overviewRow, new LinearLayout.LayoutParams(-1,-2));
         for (int i=0;i<2;i++) sims[i]=addSim(overviewRow, i);
 
-        // Read-only official device capability list; never query modem or cell scans.
+        // Separate the three meanings of band information.
         addHardwareBands(root);
+        addLiveBandDiagnostics(root);
 
         label(root, "快捷操作", 17, WHITE, true).setPadding(0, dp(21), 0, dp(10));
         Button refresh = action(root, "↻   刷新网络状态", BLUE, 0xFF152845, "status", true);
@@ -121,7 +125,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · com.android.phone     |     v0.3.7", 11, MUTED, false)
+        label(root, "LSPosed · com.android.phone     |     v0.3.9", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -130,6 +134,42 @@ public class MainActivity extends Activity {
             android.util.Log.e("Dual5G-UI", "registerReceiver failed", ex);
             details.setText("接收状态广播失败：" + ex);
         }
+    }
+
+    private void addLiveBandDiagnostics(LinearLayout root) {
+        label(root, "频段实时诊断", 17, WHITE, true).setPadding(0, dp(22), 0, dp(10));
+        LinearLayout block = panel(root, dp(16), 0);
+        label(block, "① 实际支持", 13, BLUE, true);
+        label(block, "硬件支持列表由上方官方规格提供。Android 未提供可靠的逐频段硬件能力枚举接口。", 12, MUTED, false);
+        label(block, "② 当前启用", 13, BLUE, true).setPadding(0, dp(12), 0, 0);
+        label(block, "可读取每张卡允许的 NR/LTE 等制式，但基带启用的全部 N/B Band 无通用接口，显示为「不可获取」。", 12, MUTED, false);
+        label(block, "③ 当前连接", 13, BLUE, true).setPadding(0, dp(12), 0, 0);
+        bandReport = label(block, "尚未读取。此操作只在手动点击时请求已注册小区信息。", 12, WHITE, false);
+        bandReport.setTextIsSelectable(true);
+        Button b = action(block, "⌁   读取当前连接频段", WHITE, 0xFF152845, "bands", true);
+        b.setContentDescription("只读查询当前注册基站频段");
+        label(block, "5G NSA 可能只显示 LTE 锚点；查询不到不表示不支持该频段。", 11, MUTED, false);
+    }
+
+    private void updateBands(String raw) {
+        if (bandReport == null || raw == null) return;
+        String prefix = "基站频段查询：";
+        int p = raw.indexOf(prefix);
+        if (p < 0) return;
+        int end = raw.indexOf("\n【实时", p);
+        if (end < 0) end = raw.indexOf("\n最近操作：", p);
+        if (end < 0) end = raw.length();
+        bandReport.setText(raw.substring(p + prefix.length(), end).trim());
+    }
+
+    private void updateHardware(String raw) {
+        if (hardwareReport == null || raw == null) return;
+        String prefix = "设备能力检测：";
+        int p = raw.indexOf(prefix);
+        if (p < 0) return;
+        int end = raw.indexOf("\n基站频段查询：", p);
+        if (end < 0) end = raw.length();
+        hardwareReport.setText(raw.substring(p + prefix.length(), end).trim());
     }
 
     private void addHardwareBands(LinearLayout root) {
@@ -142,11 +182,16 @@ public class MainActivity extends Activity {
                 || device.equalsIgnoreCase("PJD110");
         label(block, "OnePlus 12  ·  型号 " + model, 14, WHITE, true);
         label(block, "设备代号 " + device, 11, MUTED, false).setPadding(0, dp(3), 0, dp(8));
+        label(block, "设备读取 · Modem 无线制式能力（非逐频段）", 12, BLUE, true);
+        hardwareReport = label(block, "尚未检测。点击下方按钮读取设备支持的 NR/LTE 等制式。", 12, WHITE, false);
+        hardwareReport.setTextIsSelectable(true);
+        action(block, "⌁   检测设备无线能力", WHITE, 0xFF152845, "hardware", true);
+        label(block, "系统只提供制式能力掩码，无法直接证明 N41/N78 等单个频段是否由当前基带支持。", 11, MUTED, false);
         if (!chinaModel) {
-            label(block, "暂未匹配国行 PJD110 的官方频段表。不同地区版本频段可能不同；为避免误报，此处不显示硬件频段。", 12, MUTED, false);
+            label(block, "【官方规格】型号未匹配国行 PJD110，未采用国行频段表兜底，以免误报。", 12, MUTED, false);
             return;
         }
-        label(block, "官方规格 · 中国版 PJD110", 11, GREEN, true);
+        label(block, "【官方公布】中国版 PJD110 · 完整频段表", 11, GREEN, true);
         TextView toggle = label(block, "查看全部频段  ▾", 13, BLUE, true);
         toggle.setPadding(0, dp(14), 0, dp(8));
         LinearLayout bands = vertical();
@@ -156,7 +201,7 @@ public class MainActivity extends Activity {
         addBandLine(bands, "4G LTE FDD（12 个）", "B1 · B3 · B4 · B5 · B7 · B8 · B18 · B19 · B20 · B26 · B28A · B66");
         addBandLine(bands, "4G LTE TDD（5 个）", "B34 · B38 · B39 · B40 · B41");
         addBandLine(bands, "3G WCDMA", "B1 · B4 · B5 · B8");
-        label(bands, "信息来源：一加 12 中国官网参数表。仅表示硬件规格，不代表当前已启用、运营商支持或正在连接；不修改任何网络设置。", 11, MUTED, false)
+        label(bands, "【官方公布】来源：一加 12 中国官网参数表。此列表不是设备读取结果，也不代表当前已启用或正在连接。", 11, MUTED, false)
                 .setPadding(0, dp(10), 0, 0);
         toggle.setOnClickListener(v -> {
             boolean open = bands.getVisibility() != View.VISIBLE;
