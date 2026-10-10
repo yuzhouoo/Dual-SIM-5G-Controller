@@ -193,7 +193,11 @@ public class MainActivity extends Activity {
         label(block, "设备读取 · Modem 无线制式能力（非逐频段）", 12, BLUE, true);
         hardwareReport = label(block, "尚未检测。点击下方按钮读取设备支持的 NR/LTE 等制式。", 12, WHITE, false);
         hardwareReport.setTextIsSelectable(true);
-        action(block, "⌁   检测设备无线能力", WHITE, 0xFF152845, "hardware", true);
+        Button probe = action(block, "⌁   检测设备无线能力", WHITE, 0xFF152845, "hardware", true);
+        probe.setOnClickListener(v -> {
+            hardwareReport.setText("检测请求已发送。若 5 秒后仍无结果，请展开底部调试信息查看「最后收到指令」，确认是否为 hardware。");
+            send("hardware");
+        });
         label(block, "系统只提供制式能力掩码，无法直接证明 N41/N78 等单个频段是否由当前基带支持。", 11, MUTED, false);
         if (!chinaModel) {
             label(block, "【官方规格】型号未匹配国行 PJD110，未采用国行频段表兜底，以免误报。", 12, MUTED, false);
@@ -288,7 +292,8 @@ public class MainActivity extends Activity {
             c.mode.setTextColor(hasNr ? GREEN : WHITE);
             c.real.setText("数据  "+field(section,"当前数据网络："));
             c.voice.setText("语音  "+field(section,"当前语音网络："));
-            c.band.setText("频段  "+field(section,"当前连接频段："));
+            String band = field(section,"当前连接频段：");
+            c.band.setText("频段  " + (band.isEmpty() ? "—（系统未返回，查看调试信息）" : band));
             c.sub.setText("subId "+subId+" · Slot "+i);
         }
         if(count==0) {

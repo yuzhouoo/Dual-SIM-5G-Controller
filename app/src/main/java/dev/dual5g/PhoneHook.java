@@ -42,6 +42,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
     private static volatile Application app;
     private static volatile String lastStatus = "尚未同步";
     private static volatile String hardwareDiagnostic = "尚未检测；点击「检测设备无线能力」";
+    private static volatile String lastCommand = "初始化";
     private static volatile String bandsDiagnostic = "尚未读取；点击「读取当前连接频段」";
     private static final Runnable SYNC = () -> apply(false);
 
@@ -76,6 +77,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 final String command = intent.getStringExtra("command");
                 handler.post(() -> {
                     try {
+                        lastCommand = command == null ? "null" : command;
                         SharedPreferences prefs = prefs();
                         if ("enable".equals(command)) {
                             prefs.edit().putBoolean("enabled", true).apply(); apply(false);
@@ -101,7 +103,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.4.0 phone hook initialized; no su, no KSU module");
+        XposedBridge.log("Dual5G STANDALONE v0.4.1 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -177,6 +179,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
     private static String snapshot() {
         StringBuilder b = new StringBuilder();
         b.append("【实时双卡网络状态】\n");
+        b.append("最后收到指令：").append(lastCommand).append("\n");
         b.append("设备能力检测：").append(hardwareDiagnostic).append("\n");
         b.append("基站频段查询：").append(bandsDiagnostic).append("\n");
         b.append("最近操作：").append(lastStatus).append("\n\n");
@@ -231,7 +234,13 @@ public class PhoneHook implements IXposedHookLoadPackage {
      */
     private static String liveBands(TelephonyManager tm) {
         try {
-            ServiceState state = tm.getServiceState();
+            ServiceState state;
+            try {
+                // getServiceState() may return a location-sanitized snapshot on Android 16.
+                state = tm.getServiceState(TelephonyManager.INCLUDE_LOCATION_DATA_FINE);
+            } catch (Throwable fineError) {
+                state = tm.getServiceState();
+            }
             if (state == null) return "—（未上报 ServiceState）";
             StringBuilder answer = new StringBuilder();
             try {
@@ -247,17 +256,40 @@ public class PhoneHook implements IXposedHookLoadPackage {
                         Object cell = info.getClass().getMethod("getCellIdentity").invoke(info);
                         if (cell instanceof CellIdentityNr) {
                             CellIdentityNr nr = (CellIdentityNr) cell;
-                            return bandsText("N", nr.getBands(), nr.getNrarfcn(), "NR-ARFCN");
+                            String value = bandsText("N", nr.getBands(), nr.getNrarfcn(), "NR-ARFCN");
+                            if (!value.startsWith("—")) return value;
                         }
                         if (cell instanceof CellIdentityLte) {
                             CellIdentityLte lte = (CellIdentityLte) cell;
-                            return bandsText("B", lte.getBands(), lte.getEarfcn(), "EARFCN");
+                            String value = bandsText("B", lte.getBands(), lte.getEarfcn(), "EARFCN");
+                            if (!value.startsWith("—")) return value;
                         }
                     }
                 }
             } catch (Throwable ignored) {
                 // Reflection restrictions vary by ColorOS build: parse this snapshot only.
             }
+            // OEM implementations sometimes hide the full list but expose a direct PS/WWAN entry.
+            try {
+                Method getOne = ServiceState.class.getDeclaredMethod("getNetworkRegistrationInfo", int.class, int.class);
+                getOne.setAccessible(true);
+                Object info = getOne.invoke(state, 2, 1); // DOMAIN_PS, TRANSPORT_TYPE_WWAN
+                if (info != null) {
+                    String line = info.toString();
+                    if (line.contains("registrationState=HOME") || line.contains("registrationState=ROAMING")) {
+                        Object cell = info.getClass().getMethod("getCellIdentity").invoke(info);
+                        if (cell instanceof CellIdentityNr) {
+                            CellIdentityNr nr = (CellIdentityNr) cell;
+                            String value = bandsText("N", nr.getBands(), nr.getNrarfcn(), "NR-ARFCN");
+                            if (!value.startsWith("—")) return value;
+                        } else if (cell instanceof CellIdentityLte) {
+                            CellIdentityLte lte = (CellIdentityLte) cell;
+                            String value = bandsText("B", lte.getBands(), lte.getEarfcn(), "EARFCN");
+                            if (!value.startsWith("—")) return value;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) { }
             String dump = state.toString();
             Matcher m = Pattern.compile("NetworkRegistrationInfo\\{\\s*domain=PS\\s+transportType=WWAN(.*?)(?=NetworkRegistrationInfo\\{|\\]\\s*,?\\s*mNrFrequencyRange|$)", Pattern.DOTALL).matcher(dump);
             while (m.find()) {

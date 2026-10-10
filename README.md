@@ -1,10 +1,9 @@
-# Dual SIM 5G Controller v0.4.0 — 当前连接频段实时显示
+# v0.4.1 Live Bands Fix（实验版）
 
-- 基于 v0.3.9，保持独立 LSPosed APK，`com.android.phone` 为作用域。
-- 在每张 SIM 卡状态卡内新增「频段」，由电话进程调用 `TelephonyManager.getServiceState()` 读取当前 `PS/WWAN` 注册小区信息；优先用 `NetworkRegistrationInfo` 反射获取 `CellIdentityNr/Lte.getBands()`，厂商限制时仅解析当前 `ServiceState.toString()` 快照。
-- 页面前台每 4 秒刷新；离开页面停止定时请求；不存储任何历史频段。频段未上报时立即显示未知，不沿用旧值。
-- 额外保留硬件能力检测及标注为「官方公布」的 PJD110 官方频段表、双卡切换策略等。
-- 不在轮询过程中调用 `getAllCellInfo()`、基带 OEM 命令或 `su`。
-- 当前状态是已注册主小区的系统上报频段，可能缺失 NSA NR 和载波聚合辅助频段。
+修复方向：Android 16 上 `getServiceState()` 返回的位置脱敏数据可能缺失 `CellIdentity`。优先 `getServiceState(TelephonyManager.INCLUDE_LOCATION_DATA_FINE)`，失败回退。尝试 NetworkRegistrationInfo 直取和解析当前快照。
 
-> 注意：源码包未在本环境通过 Android SDK 构建或 OnePlus 12 真机验证。用仓库的 GitHub Actions 构建、测试，如出现编译失败请提供日志。
+设备能力按钮增加明确的请求反馈；电话进程回传增加“最后收到指令”以排查广播通道。若显示为 hardware，说明按钮已经送达；若停留在 status，检查作用域/权限。
+
+**限制**：未在 OnePlus 12 或 Android SDK 上验证；这不是已确认修复。如频段仍空白，需要调试信息中的当前连接频段返回提示与最后收到指令。
+
+仍然是单 APK LSPosed，无 KernelSU 模块，不保存频段历史。原有 5G 切换逻辑未修改。
