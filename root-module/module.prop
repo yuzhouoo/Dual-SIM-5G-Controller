@@ -1,6 +1,0 @@
-id=dual_sim_5g
-name=Dual SIM 5G Controller Root Service
-version=0.1.0
-versionCode=1
-author=DualSim5G
-description=Allow NR on default data SIM; remove NR on secondary SIM; independent of LSPosed hook.
