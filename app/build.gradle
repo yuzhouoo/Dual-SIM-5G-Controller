@@ -5,9 +5,9 @@ android {
     defaultConfig {
         applicationId 'dev.dual5g'
         minSdk 31
-        targetSdk 28 // Restricted system process hook; avoids unrelated Android 14 receiver changes.
-        versionCode 1
-        versionName '0.1.0'
+        targetSdk 35
+        versionCode 3
+        versionName '0.2.0-standalone'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }

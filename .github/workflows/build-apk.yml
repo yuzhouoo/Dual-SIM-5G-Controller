@@ -1,4 +1,4 @@
-name: Build LSPosed APK
+name: Build Standalone LSPosed APK
 on:
   workflow_dispatch:
   push:
@@ -14,16 +14,18 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
       - name: Install Android SDK 36
         run: sdkmanager 'platforms;android-36' 'build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Compile debug APK
+      - name: Compile APK
         run: gradle :app:assembleDebug --no-daemon --stacktrace
       - uses: actions/upload-artifact@v4
         with:
-          name: DualSim5G-debug-APK
+          name: DualSim5G-Standalone-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
