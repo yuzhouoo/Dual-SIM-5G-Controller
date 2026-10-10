@@ -144,7 +144,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · com.android.phone     |     v0.4.2", 11, MUTED, false)
+        label(root, "LSPosed · com.android.phone     |     v0.4.4", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -258,13 +258,9 @@ public class MainActivity extends Activity {
         TextView voice=label(card,"语音  —",11,MUTED,false);
         TextView band=label(card,"频段  —",12,BLUE,true);
         band.setPadding(0,dp(7),0,0);
-        TextView signal=label(card,"信号强度  —",11,WHITE,false);
-        signal.setPadding(0,dp(8),0,0);
-        TextView qos=label(card,"QCI/5QI及签约速率  —",11,MUTED,false);
-        qos.setPadding(0,dp(6),0,0);
         TextView sub=label(card,"subId  —",10,MUTED,false);
         sub.setPadding(0,dp(9),0,0);
-        return new SimCard(card,pill,carrier,mode,real,voice,band,signal,qos,sub);
+        return new SimCard(card,pill,carrier,mode,real,voice,band,sub);
     }
 
     private void setEmptySlot(SimCard c) {
@@ -276,8 +272,6 @@ public class MainActivity extends Activity {
         c.real.setText("数据  —");
         c.voice.setText("语音  —");
         c.band.setText("频段  —");
-        c.signal.setText("信号强度  —");
-        c.qos.setText("QCI/5QI及签约速率  —");
         c.sub.setText("subId  —");
         c.container.setAlpha(0.68f);
     }
@@ -308,8 +302,6 @@ public class MainActivity extends Activity {
             c.voice.setText("语音  "+field(section,"当前语音网络："));
             String band = field(section,"当前连接频段：");
             c.band.setText("频段  " + (band.isEmpty() ? "—（系统未返回，查看调试信息）" : band));
-            c.signal.setText("信号  " + field(section,"信号强度："));
-            c.qos.setText("QoS  " + field(section,"网络 QoS："));
             c.sub.setText("subId "+subId+" · Slot "+i);
         }
         if(count==0) {
@@ -335,9 +327,9 @@ public class MainActivity extends Activity {
     }
     private static class SimCard {
         final LinearLayout container;
-        final TextView pill,carrier,mode,real,voice,band,signal,qos,sub;
-        SimCard(LinearLayout box,TextView a,TextView b,TextView c,TextView d,TextView e,TextView f,TextView g,TextView h,TextView j) {
-            container=box;pill=a;carrier=b;mode=c;real=d;voice=e;band=f;signal=g;qos=h;sub=j;
+        final TextView pill,carrier,mode,real,voice,band,sub;
+        SimCard(LinearLayout box,TextView a,TextView b,TextView c,TextView d,TextView e,TextView f,TextView g) {
+            container=box;pill=a;carrier=b;mode=c;real=d;voice=e;band=f;sub=g;
         }
     }
     private LinearLayout vertical(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
