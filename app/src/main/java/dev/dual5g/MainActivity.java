@@ -96,6 +96,9 @@ public class MainActivity extends Activity {
         root.addView(overviewRow, new LinearLayout.LayoutParams(-1,-2));
         for (int i=0;i<2;i++) sims[i]=addSim(overviewRow, i);
 
+        // Read-only official device capability list; never query modem or cell scans.
+        addHardwareBands(root);
+
         label(root, "快捷操作", 17, WHITE, true).setPadding(0, dp(21), 0, dp(10));
         Button refresh = action(root, "↻   刷新网络状态", BLUE, 0xFF152845, "status", true);
         refresh.setContentDescription("刷新双卡状态");
@@ -118,7 +121,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · com.android.phone     |     v0.3.5", 11, MUTED, false)
+        label(root, "LSPosed · com.android.phone     |     v0.3.7", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -127,6 +130,44 @@ public class MainActivity extends Activity {
             android.util.Log.e("Dual5G-UI", "registerReceiver failed", ex);
             details.setText("接收状态广播失败：" + ex);
         }
+    }
+
+    private void addHardwareBands(LinearLayout root) {
+        label(root, "设备硬件支持频段", 17, WHITE, true)
+                .setPadding(0, dp(24), 0, dp(10));
+        LinearLayout block = panel(root, dp(16), 0);
+        String model = Build.MODEL == null ? "未知" : Build.MODEL.trim();
+        String device = Build.DEVICE == null ? "未知" : Build.DEVICE.trim();
+        boolean chinaModel = model.equalsIgnoreCase("PJD110")
+                || device.equalsIgnoreCase("PJD110");
+        label(block, "OnePlus 12  ·  型号 " + model, 14, WHITE, true);
+        label(block, "设备代号 " + device, 11, MUTED, false).setPadding(0, dp(3), 0, dp(8));
+        if (!chinaModel) {
+            label(block, "暂未匹配国行 PJD110 的官方频段表。不同地区版本频段可能不同；为避免误报，此处不显示硬件频段。", 12, MUTED, false);
+            return;
+        }
+        label(block, "官方规格 · 中国版 PJD110", 11, GREEN, true);
+        TextView toggle = label(block, "查看全部频段  ▾", 13, BLUE, true);
+        toggle.setPadding(0, dp(14), 0, dp(8));
+        LinearLayout bands = vertical();
+        block.addView(bands);
+        bands.setVisibility(View.GONE);
+        addBandLine(bands, "5G NR（13 个）", "N1 · N3 · N5 · N7 · N8 · N20 · N28A · N38 · N40 · N41 · N66 · N77 · N78");
+        addBandLine(bands, "4G LTE FDD（12 个）", "B1 · B3 · B4 · B5 · B7 · B8 · B18 · B19 · B20 · B26 · B28A · B66");
+        addBandLine(bands, "4G LTE TDD（5 个）", "B34 · B38 · B39 · B40 · B41");
+        addBandLine(bands, "3G WCDMA", "B1 · B4 · B5 · B8");
+        label(bands, "信息来源：一加 12 中国官网参数表。仅表示硬件规格，不代表当前已启用、运营商支持或正在连接；不修改任何网络设置。", 11, MUTED, false)
+                .setPadding(0, dp(10), 0, 0);
+        toggle.setOnClickListener(v -> {
+            boolean open = bands.getVisibility() != View.VISIBLE;
+            bands.setVisibility(open ? View.VISIBLE : View.GONE);
+            toggle.setText(open ? "收起全部频段  ▴" : "查看全部频段  ▾");
+        });
+    }
+
+    private void addBandLine(LinearLayout parent, String title, String values) {
+        label(parent, title, 12, BLUE, true).setPadding(0, dp(10), 0, dp(3));
+        label(parent, values, 12, WHITE, false);
     }
 
     private SimCard addSim(LinearLayout row, int slot) {
