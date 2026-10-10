@@ -1,11 +1,12 @@
-# Dual SIM 5G Controller v0.3.2
+# Dual SIM 5G Controller v0.3.5 (stability candidate)
 
-在 v0.3.1 基础上仅重排 SIM 网络概览：两个等宽卡片并排展示，适配双卡、单卡和无卡。
+基于 v0.3.2，保留 SIM 并排、单卡/无卡占位及 PhoneHook 双卡管理。
 
-- 有卡：显示运营商、默认数据卡、5G/4G 允许模式、当前数据/语音网络。
-- 空卡槽：显示“未插卡 / 无 SIM”，保留占位卡片。
-- 两卡均无：顶部显示“未检测到活动 SIM”，两张空卡片。
-- 实际数据网络 UNKNOWN 不等于无信号。
-- 保留 v0.3.1 的状态栏安全边距和 LSPosed PhoneHook，不修改核心切换逻辑。
+- 去除 Activity 启动时对 WindowInsetsController 的直接访问，以及强制边到边窗口切换。
+- 保留 ScrollView 安全区域 Insets 处理。
+- 动态广播注册添加异常保护，防止 onDestroy 未注册就注销。
+- 增加 `Dual5G-UI` 日志，方便进一步定位。
 
-使用仓库内 GitHub Actions 构建 APK。注意：未在真实 Android 16 设备中编译/实测。
+**未在 Android SDK 编译及 OnePlus 12 真机验证，不能保证闪退已解决。**
+
+建议用：`adb logcat -c; adb logcat -v time -s AndroidRuntime:E Dual5G-UI:E ActivityTaskManager:E`，然后打开 APP，复制崩溃日志。

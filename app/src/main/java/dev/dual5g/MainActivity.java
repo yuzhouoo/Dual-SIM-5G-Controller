@@ -34,6 +34,7 @@ public class MainActivity extends Activity {
     private final SimCard[] sims = new SimCard[2];
     private LinearLayout debugBox;
     private boolean expanded = false;
+    private boolean receiverRegistered = false;
     private final BroadcastReceiver updates = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String raw = intent.getStringExtra("status");
@@ -49,29 +50,14 @@ public class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        // ColorOS 16 / Android 16: status bar must remain visible, with light icons
-        // on the dark dashboard. Insets are applied below to prevent overlap.
+        // Conservative system bar setup: avoid accessing WindowInsetsController
+        // during Activity creation (may be unavailable on customized ROMs).
         Window window = getWindow();
-        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN
-                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS
-                | WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+        window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
         window.setStatusBarColor(BG);
         window.setNavigationBarColor(BG);
-        if (Build.VERSION.SDK_INT >= 29) {
-            window.setStatusBarContrastEnforced(false);
-            window.setNavigationBarContrastEnforced(false);
-        }
-        if (Build.VERSION.SDK_INT >= 30) {
-            window.setDecorFitsSystemWindows(false);
-            window.getInsetsController().show(WindowInsets.Type.statusBars()
-                    | WindowInsets.Type.navigationBars());
-            window.getInsetsController().setSystemBarsAppearance(
-                    0, android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
-                            | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
-        } else {
-            window.getDecorView().setSystemUiVisibility(0);
-        }
+        window.getDecorView().setSystemUiVisibility(0); // light icons on dark bar
         ScrollView scroll = new ScrollView(this);
         if (Build.VERSION.SDK_INT >= 30) {
             scroll.setOnApplyWindowInsetsListener((view, insets) -> {
@@ -132,9 +118,15 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · com.android.phone     |     v0.3.2", 11, MUTED, false)
+        label(root, "LSPosed · com.android.phone     |     v0.3.5", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
-        registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
+        try {
+            registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
+            receiverRegistered = true;
+        } catch (RuntimeException ex) {
+            android.util.Log.e("Dual5G-UI", "registerReceiver failed", ex);
+            details.setText("接收状态广播失败：" + ex);
+        }
     }
 
     private SimCard addSim(LinearLayout row, int slot) {
@@ -256,5 +248,11 @@ public class MainActivity extends Activity {
         i.putExtra("command",command);sendBroadcast(i);
     }
     @Override protected void onResume(){super.onResume();if(details!=null)send("status");}
-    @Override protected void onDestroy(){unregisterReceiver(updates);super.onDestroy();}
+    @Override protected void onDestroy(){
+        if (receiverRegistered) {
+            try { unregisterReceiver(updates); }
+            catch (RuntimeException ex) { android.util.Log.w("Dual5G-UI", "unregisterReceiver", ex); }
+        }
+        super.onDestroy();
+    }
 }
