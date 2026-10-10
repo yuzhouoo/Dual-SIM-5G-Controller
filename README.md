@@ -1,3 +1,7 @@
+# v0.2.4 编译修复
+
+移除 PhoneHook.java 中对非公开 SDK 常量 `TelephonyManager.NETWORK_TYPE_LTE_CA` 的引用；其他逻辑保持不变。
+
 # Dual SIM 5G Controller — Standalone LSPosed APK v0.2.0
 
 Single APK. **No KernelSU module, no `su` command, no root shell in the APK.** Requires installed and working LSPosed framework (rooted phone). Targets `com.android.phone` using Legacy Xposed API.

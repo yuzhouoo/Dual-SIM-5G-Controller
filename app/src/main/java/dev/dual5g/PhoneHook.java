@@ -85,7 +85,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.2.3 phone hook initialized; no su, no KSU module");
+        XposedBridge.log("Dual5G STANDALONE v0.2.4 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -147,7 +147,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
             if (restore) report.append("已尝试恢复首次接管时备份的模式；自动切换已停用\n");
             report.append("修改次数=").append(changed);
             lastStatus = report.toString();
-            XposedBridge.log("Dual5G STANDALONE v0.2.3 policy: " + lastStatus);
+            XposedBridge.log("Dual5G STANDALONE v0.2.4 policy: " + lastStatus);
         } catch (SecurityException e) {
             lastStatus = "权限不足：电话进程 API 被 ROM 拒绝: " + e;
             XposedBridge.log("Dual5G permission failure " + e);
@@ -209,7 +209,6 @@ public class PhoneHook implements IXposedHookLoadPackage {
         switch (type) {
             case TelephonyManager.NETWORK_TYPE_NR: return "5G NR";
             case TelephonyManager.NETWORK_TYPE_LTE: return "4G LTE";
-            case TelephonyManager.NETWORK_TYPE_LTE_CA: return "4G LTE_CA";
             case TelephonyManager.NETWORK_TYPE_UMTS: return "3G UMTS";
             case TelephonyManager.NETWORK_TYPE_HSPA: return "3G HSPA";
             case TelephonyManager.NETWORK_TYPE_HSPAP: return "3G HSPA+";
