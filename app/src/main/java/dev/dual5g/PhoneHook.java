@@ -20,6 +20,11 @@ import android.telephony.CellInfoNr;
 import android.telephony.CellIdentityLte;
 import android.telephony.CellIdentityNr;
 import android.telephony.ServiceState;
+import android.telephony.SignalStrength;
+import android.telephony.CellSignalStrength;
+import android.telephony.CellSignalStrengthNr;
+import android.telephony.CellSignalStrengthLte;
+import android.telephony.CellInfo;
 import java.lang.reflect.Method;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
@@ -230,6 +235,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
                     b.append("当前数据网络：").append(networkName(dataType)).append("\n");
                     b.append("当前语音网络：").append(networkName(voiceType)).append("\n");
                     b.append("当前连接频段：").append(liveBands(tm)).append("\n");
+                    b.append("信号强度：").append(readSignal(tm, dataType)).append("\n");
+                    b.append("网络 QoS：").append(readQos(slot)).append("\n");
                     b.append("当前允许制式：").append(formatRats(mask)).append("（不是启用频段列表）\n");
                     b.append("提示：数据网络 UNKNOWN 不等于无信号，副卡未启用数据时可能返回 UNKNOWN\n");
                 } catch (Throwable t) {
@@ -352,6 +359,95 @@ public class PhoneHook implements IXposedHookLoadPackage {
         if (b.length() == 0) return "—（无有效 Band）";
         if (channel >= 0 && channel != Integer.MAX_VALUE) b.append(" · ").append(channelName).append(" ").append(channel);
         return b.toString();
+    }
+
+    /** Never assume the LTE signal belongs to an NR connection or vice versa. */
+    private static String readSignal(TelephonyManager tm, int dataType) {
+        try {
+            SignalStrength signal = tm.getSignalStrength();
+            if (signal == null) return "未上报";
+            CellSignalStrengthNr nr = null;
+            CellSignalStrengthLte lte = null;
+            for (CellSignalStrength c : signal.getCellSignalStrengths()) {
+                if (c instanceof CellSignalStrengthNr) nr = (CellSignalStrengthNr)c;
+                if (c instanceof CellSignalStrengthLte) lte = (CellSignalStrengthLte)c;
+            }
+            boolean isNr = dataType == TelephonyManager.NETWORK_TYPE_NR;
+            if (isNr && nr != null) {
+                return "NR SS-RSRP " + signalValue(nr.getSsRsrp(), " dBm")
+                    + " · SS-RSRQ " + signalValue(nr.getSsRsrq(), " dB")
+                    + " · SS-SINR " + signalValue(nr.getSsSinr(), " dB");
+            }
+            if (lte != null) {
+                return "LTE RSRP " + signalValue(lte.getRsrp(), " dBm")
+                    + " · RSRQ " + signalValue(lte.getRsrq(), " dB")
+                    + " · RSSNR " + signalValue(lte.getRssnr(), " dB");
+            }
+            if (nr != null) {
+                return "NR SS-RSRP " + signalValue(nr.getSsRsrp(), " dBm")
+                    + " · SS-RSRQ " + signalValue(nr.getSsRsrq(), " dB")
+                    + " · SS-SINR " + signalValue(nr.getSsSinr(), " dB");
+            }
+            return "未上报（信号等级 " + signal.getLevel() + "/4）";
+        } catch (Throwable t) { return "读取受限（" + t.getClass().getSimpleName() + "）"; }
+    }
+
+    private static String signalValue(int value, String unit) {
+        return value == Integer.MAX_VALUE ? "未上报" : value + unit;
+    }
+
+    /** Optional passive read of *existing* DataNetwork QoS objects; no modem/RIL requests.
+     * An exposed QoS object is not necessarily the operator's plan speed cap.
+     */
+    private static String readQos(int slot) {
+        try {
+            Class<?> factory = Class.forName("com.android.internal.telephony.PhoneFactory");
+            java.lang.reflect.Method getPhone = factory.getDeclaredMethod("getPhone", int.class);
+            getPhone.setAccessible(true);
+            Object phone = getPhone.invoke(null, slot);
+            Object controller = callOptional(phone, "getDataNetworkController");
+            Object networks = callOptional(controller, "getDataNetworkList");
+            if (!(networks instanceof java.lang.Iterable)) return "QCI/5QI 未上报 · 签约上下行速率未上报";
+            for (Object network : (java.lang.Iterable<?>)networks) {
+                Object response = callOptional(network, "getDataCallResponse");
+                Object qos = callOptional(response, "getDefaultQos");
+                if (qos == null) qos = callOptional(network, "getDefaultQos");
+                String detail = formatQos(qos);
+                if (detail != null) return detail;
+            }
+            return "QCI/5QI 未上报 · 签约上下行速率未上报";
+        } catch (Throwable t) {
+            return "QCI/5QI 未上报 · 签约上下行速率未上报（" + t.getClass().getSimpleName() + "）";
+        }
+    }
+
+    private static Object callOptional(Object owner, String method) {
+        if (owner == null) return null;
+        for (Class<?> cls = owner.getClass(); cls != null; cls = cls.getSuperclass()) {
+            try {
+                java.lang.reflect.Method m = cls.getDeclaredMethod(method);
+                m.setAccessible(true);
+                return m.invoke(owner);
+            } catch (NoSuchMethodException ignored) {
+            } catch (Throwable ignored) { return null; }
+        }
+        return null;
+    }
+
+    private static String formatQos(Object qos) {
+        if (qos == null) return null;
+        Object qci = callOptional(qos, "getQci");
+        Object fiveQi = callOptional(qos, "get5Qi");
+        if (qci == null && fiveQi == null) return null;
+        Object down = callOptional(qos, "getDownlinkBandwidth");
+        Object up = callOptional(qos, "getUplinkBandwidth");
+        Object downMax = callOptional(down, "getMaxBitrateKbps");
+        Object upMax = callOptional(up, "getMaxBitrateKbps");
+        // QoS flow maximum bitrate is NOT necessarily APN/Session-AMBR or a plan subscription limit.
+        return (qci != null ? "QCI " + qci : "5QI " + fiveQi)
+            + " · QoS最大下行 " + (downMax instanceof Number ? downMax + " kbps" : "未上报")
+            + " · QoS最大上行 " + (upMax instanceof Number ? upMax + " kbps" : "未上报")
+            + " · 签约上下行速率 未上报（QoS速率非签约限速）";
     }
 
     /** Read-only modem RAT capability. Android does not provide an exhaustive hardware-band API. */

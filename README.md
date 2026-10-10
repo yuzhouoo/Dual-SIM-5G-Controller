@@ -1,17 +1,11 @@
-# v0.4.2 IPC 修复测试版
+# v0.4.3 — SIM 网络概览增加信号与 QoS 诊断
 
-## 背景
-v0.4.1 三项同时失败：概览频段为空、能力检测无反馈、调试页没有接收指令。优先修复 APP 到 com.android.phone 的 IPC；频段读取路径仍需真机验证。
+基于用户真机验证的 v0.4.2。保留双卡切换、通信、实时频段代码。
 
-## 更改
-1. 控制广播接收端取消 APP 自定义 signature 权限过滤，改为 Android 16 getSentFromUid() 校验发送 UID 必须是 dev.dual5g（或系统 UID）。不允许其他第三方应用发出控制指令。
-2. 增加 `ping` 心跳指令，收到时报告 `IPC PONG`。在发送硬件检测后 6 秒没有电话进程回包时显示明确错误。
-3. 在前台首次定时查询仍无回包时，提示 LSPosed 作用域/重启检查。
-4. 不触碰已验证工作的自动双卡 5G/4G 政策算法；实时频段仍采用现有读取方式，可能因 ColorOS 受限而为空。
+- 每张活动 SIM 的网络概览展示实时信号 RSRP / RSRQ / SINR（NR）或 RSRP / RSRQ / RSSNR（LTE），无效值显示“未上报”。
+- 分卡只读尝试检查 com.android.phone 内存中已存在的 DataNetwork/DefaultQos；如果平台没有相关访问器，明确显示 QCI/5QI 未上报。
+- 有 QoS 速率时单独标为“QoS最大速率”，绝不混同于运营商签约限速（APN-AMBR、Session-AMBR 或套餐封顶速率）；签约上下行速率暂显示未上报。
+- 不在“当前上网卡”区域增加字段；无卡位不显示虚假数据；不存历史。
+- 原有 LSPosed + APK 方案不需要 KernelSU 模块。安装后重启让 com.android.phone 重载 Hook。
 
-## 测试
-- 安装新 APK，确认 LSPosed 模块开启且作用域包含 `com.android.phone`，重启手机。
-- 打开 APP 查看是否存在「电话进程没有返回状态」；点击「检测设备无线能力」检查结果。
-- 如仍无响应，请获取 `adb logcat -d -v time | grep -iE 'Dual5G|FATAL EXCEPTION|BroadcastQueue' | tail -100`。
-
-本工程未在当前环境编译或真机运行，仅完成源代码及 ZIP 检查。
+提示：本工程未在 Android SDK 或设备上编译/运行验证，QoS 数据可能因厂商内部实现而缺失。
