@@ -7,23 +7,17 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.Build;
-import android.os.Process;
-import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
-import android.telephony.CellInfo;
-import android.telephony.CellInfoLte;
-import android.telephony.CellInfoNr;
 import android.telephony.CellIdentityLte;
 import android.telephony.CellIdentityNr;
 import android.telephony.ServiceState;
 import java.lang.reflect.Method;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -43,9 +37,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
     private static volatile Handler handler;
     private static volatile Application app;
     private static volatile String lastStatus = "尚未同步";
-    private static volatile String hardwareDiagnostic = "尚未检测；点击「检测设备无线能力」";
-    private static volatile String lastCommand = "初始化";
-    private static volatile String bandsDiagnostic = "尚未读取；点击「读取当前连接频段」";
+    private static volatile String hardwareDiagnostic = "尚未检测（可点击检测设备无线能力）";
     private static final Runnable SYNC = () -> apply(false);
 
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) {
@@ -76,33 +68,11 @@ public class PhoneHook implements IXposedHookLoadPackage {
         // so other apps cannot issue privileged requests.
         application.registerReceiver(new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
-                // Do not let an unavailable sender UID break read-only diagnostics.
-                // Android's getSentFromUid() may return -1 when identity isn't attached.
-                // Such broadcasts can ONLY query status, never change radio settings.
                 final String command = intent.getStringExtra("command");
-                boolean senderTrusted = false;
-                try {
-                    int senderUid = getSentFromUid();
-                    int appUid = context.getPackageManager().getPackageUid("dev.dual5g", 0);
-                    senderTrusted = senderUid == appUid || senderUid == Process.SYSTEM_UID || senderUid == 0;
-                    if (!senderTrusted) {
-                        XposedBridge.log("Dual5G unverified sender uid=" + senderUid + ", cmd=" + command);
-                    }
-                } catch (Throwable verifyError) {
-                    XposedBridge.log("Dual5G sender UID unavailable: " + verifyError);
-                }
-                if (!senderTrusted && !("status".equals(command) || "ping".equals(command)
-                        || "hardware".equals(command) || "bands".equals(command))) {
-                    XposedBridge.log("Dual5G rejected privileged command without verified UID: " + command);
-                    return;
-                }
                 handler.post(() -> {
                     try {
-                        lastCommand = command == null ? "null" : command;
                         SharedPreferences prefs = prefs();
-                        if ("ping".equals(command)) {
-                            lastStatus = "IPC PONG: 电话进程在线，UID 验证通过";
-                        } else if ("enable".equals(command)) {
+                        if ("enable".equals(command)) {
                             prefs.edit().putBoolean("enabled", true).apply(); apply(false);
                         } else if ("disable".equals(command)) {
                             prefs.edit().putBoolean("enabled", false).apply();
@@ -114,7 +84,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                         } else if ("hardware".equals(command)) {
                             hardwareDiagnostic = queryHardwareCapability();
                         } else if ("bands".equals(command)) {
-                            bandsDiagnostic = queryRegisteredBands();
+                            // Current bands are included in every fresh status snapshot.
                         } else if (!"status".equals(command)) {
                             lastStatus = "未知操作";
                         }
@@ -125,8 +95,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
                     reply();
                 });
             }
-        }, new IntentFilter(CONTROL), null, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.4.7 phone hook initialized; no su, no KSU module");
+        }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
+        XposedBridge.log("Dual5G STANDALONE v0.4.8 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -188,7 +158,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
             if (restore) report.append("已尝试恢复首次接管时备份的模式；自动切换已停用\n");
             report.append("修改次数=").append(changed);
             lastStatus = report.toString();
-            XposedBridge.log("Dual5G STANDALONE v0.4.0 policy: " + lastStatus);
+            XposedBridge.log("Dual5G STANDALONE v0.2.4 policy: " + lastStatus);
         } catch (SecurityException e) {
             lastStatus = "权限不足：电话进程 API 被 ROM 拒绝: " + e;
             XposedBridge.log("Dual5G permission failure " + e);
@@ -202,10 +172,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
     private static String snapshot() {
         StringBuilder b = new StringBuilder();
         b.append("【实时双卡网络状态】\n");
-        b.append("最后收到指令：").append(lastCommand).append("\n");
-        b.append("设备能力检测：").append(hardwareDiagnostic).append("\n");
-        b.append("基站频段查询：").append(bandsDiagnostic).append("\n");
-        b.append("最近操作：").append(lastStatus).append("\n\n");
+        b.append("最近操作：").append(lastStatus).append("\n");
+        b.append("设备能力检测：").append(hardwareDiagnostic).append("\n\n");
         try {
             int dataId = SubscriptionManager.getDefaultDataSubscriptionId();
             SubscriptionManager sm = app.getSystemService(SubscriptionManager.class);
@@ -235,8 +203,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
                     int voiceType = tm.getVoiceNetworkType();
                     b.append("当前数据网络：").append(networkName(dataType)).append("\n");
                     b.append("当前语音网络：").append(networkName(voiceType)).append("\n");
-                    b.append("当前连接频段：").append(liveBands(tm)).append("\n");
-                    b.append("当前允许制式：").append(formatRats(mask)).append("（不是启用频段列表）\n");
+                    try { b.append("当前连接频段：").append(liveBands(tm)).append("\n"); }
+                    catch (Throwable e) { b.append("当前连接频段：—（读取失败）\n"); }
                     b.append("提示：数据网络 UNKNOWN 不等于无信号，副卡未启用数据时可能返回 UNKNOWN\n");
                 } catch (Throwable t) {
                     b.append("读取该卡失败：").append(t.getClass().getSimpleName())
@@ -360,92 +328,30 @@ public class PhoneHook implements IXposedHookLoadPackage {
         return b.toString();
     }
 
-    /** Read-only modem RAT capability. Android does not provide an exhaustive hardware-band API. */
+    /** Read-only on-demand modem RAT report. This is not a complete band capability list. */
     private static String queryHardwareCapability() {
-        if (app == null) return "电话进程未就绪";
-        StringBuilder b = new StringBuilder();
         try {
             TelephonyManager base = app.getSystemService(TelephonyManager.class);
             SubscriptionManager sm = app.getSystemService(SubscriptionManager.class);
-            if (base == null) return "电话服务不可用";
-            List<SubscriptionInfo> subs = sm == null ? null : sm.getActiveSubscriptionInfoList();
-            if (subs == null || subs.isEmpty()) {
-                appendRadioCapability(b, "设备默认 Modem", base);
-            } else {
-                for (SubscriptionInfo sub : subs) {
-                    if (sub.getSimSlotIndex() < 0) continue;
-                    appendRadioCapability(b, "卡槽 " + (sub.getSimSlotIndex() + 1),
-                            base.createForSubscriptionId(sub.getSubscriptionId()));
-                }
-            }
-        } catch (Throwable t) {
-            b.append("探测失败：").append(t.getClass().getSimpleName()).append(" ").append(t.getMessage());
-            XposedBridge.log("Dual5G hardware capability probe error: " + t);
-        }
-        b.append("\n【设备读取】仅无线制式能力（NR/LTE 等），不是逐频段 N/B 清单。")
-         .append("\n【完整频段】系统不提供通用枚举接口；支持机型使用单独标注的官方规格兜底。");
-        return b.toString();
-    }
-
-    private static void appendRadioCapability(StringBuilder b, String name, TelephonyManager tm) {
-        b.append(name).append("：");
-        try {
-            long raf = tm.getSupportedRadioAccessFamily();
-            b.append(formatRats(raf)).append("；RAF=0x").append(Long.toHexString(raf));
-            if (raf == 0) b.append("（未返回有效能力）");
-        } catch (Throwable t) {
-            b.append("读取受限：").append(t.getClass().getSimpleName());
-        }
-        b.append('\n');
-    }
-
-    /** Read-only, on-demand cell information. NEVER call from normal status polling. */
-    private static String queryRegisteredBands() {
-        if (app == null) return "电话进程未就绪";
-        StringBuilder result = new StringBuilder("仅已注册小区：");
-        try {
-            SubscriptionManager sm = app.getSystemService(SubscriptionManager.class);
-            TelephonyManager base = app.getSystemService(TelephonyManager.class);
-            if (sm == null || base == null) return "电话服务不可用";
-            List<SubscriptionInfo> subs = sm.getActiveSubscriptionInfoList();
-            if (subs == null || subs.isEmpty()) return "无活动 SIM";
-            for (SubscriptionInfo sub : subs) {
-                int slot = sub.getSimSlotIndex();
-                if (slot < 0) continue;
-                result.append("\nSIM ").append(slot + 1).append(": ");
+            if (base == null || sm == null) return "电话服务未就绪";
+            StringBuilder b = new StringBuilder();
+            List<SubscriptionInfo> list = sm.getActiveSubscriptionInfoList();
+            if (list != null) for (SubscriptionInfo si : list) {
+                if (si.getSimSlotIndex() < 0) continue;
                 try {
-                    List<CellInfo> cells = base.createForSubscriptionId(sub.getSubscriptionId()).getAllCellInfo();
-                    if (cells == null) { result.append("系统未上报小区信息"); continue; }
-                    LinkedHashSet<String> found = new LinkedHashSet<>();
-                    for (CellInfo cell : cells) {
-                        if (cell == null || !cell.isRegistered()) continue;
-                        if (cell instanceof CellInfoNr) {
-                            CellIdentityNr id = (CellIdentityNr) ((CellInfoNr) cell).getCellIdentity();
-                            for (int band : id.getBands()) if (band > 0) found.add("N" + band);
-                        } else if (cell instanceof CellInfoLte) {
-                            CellIdentityLte id = (CellIdentityLte) ((CellInfoLte) cell).getCellIdentity();
-                            for (int band : id.getBands()) if (band > 0) found.add("B" + band);
-                        }
-                    }
-                    result.append(found.isEmpty() ? "未上报已注册 LTE/NR 频段（NSA 可能只提供 LTE 锚点）" : android.text.TextUtils.join(" / ", found));
+                    long raf = base.createForSubscriptionId(si.getSubscriptionId()).getSupportedRadioAccessFamily();
+                    b.append("卡槽 ").append(si.getSimSlotIndex()+1)
+                     .append("【设备读取】支持制式 RAF=0x")
+                     .append(Long.toHexString(raf)).append("；NR=")
+                     .append((raf & NR) != 0 ? "是" : "否/未返回")
+                     .append("\n");
                 } catch (Throwable e) {
-                    result.append("读取失败：").append(e.getClass().getSimpleName())
-                          .append(" ").append(e.getMessage());
+                    b.append("卡槽 ").append(si.getSimSlotIndex()+1)
+                     .append("：无法获取（").append(e.getClass().getSimpleName()).append("）\n");
                 }
             }
-            result.append("\n说明：此结果仅代表系统报告的已注册小区，不包含全部载波聚合或基带启用频段。");
-            return result.toString();
-        } catch (Throwable e) {
-            XposedBridge.log("Dual5G bands diagnostic failure: " + e);
-            return "频段诊断失败：" + e.getClass().getSimpleName() + " " + e.getMessage();
-        }
-    }
-
-    private static String formatRats(long mask) {
-        StringBuilder r = new StringBuilder();
-        if ((mask & TelephonyManager.NETWORK_TYPE_BITMASK_NR) != 0) r.append("NR/5G ");
-        if ((mask & TelephonyManager.NETWORK_TYPE_BITMASK_LTE) != 0) r.append("LTE/4G ");
-        return r.length() == 0 ? "其他制式" : r.toString().trim();
+            return b.append("【说明】设备读取仅报告无线制式，完整 N/B 频段请参考标注为官方公布的列表。").toString();
+        } catch (Throwable t) { return "检测失败：" + t.getClass().getSimpleName(); }
     }
 
     private static String networkName(int type) {
@@ -468,7 +374,6 @@ public class PhoneHook implements IXposedHookLoadPackage {
             Intent out = new Intent(RESULT).setPackage("dev.dual5g");
             out.putExtra("status", snapshot());
             out.putExtra("enabled", prefs().getBoolean("enabled", true));
-            out.putExtra("replyId", System.currentTimeMillis());
             app.sendBroadcast(out);
         } catch (Throwable t) { XposedBridge.log("Dual5G reply failed " + t); }
     }
