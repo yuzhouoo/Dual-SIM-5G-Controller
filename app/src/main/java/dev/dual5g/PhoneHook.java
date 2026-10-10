@@ -17,6 +17,10 @@ import android.telephony.CellInfoLte;
 import android.telephony.CellInfoNr;
 import android.telephony.CellIdentityLte;
 import android.telephony.CellIdentityNr;
+import android.telephony.ServiceState;
+import java.lang.reflect.Method;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -97,7 +101,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.3.9 phone hook initialized; no su, no KSU module");
+        XposedBridge.log("Dual5G STANDALONE v0.4.0 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -159,7 +163,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
             if (restore) report.append("已尝试恢复首次接管时备份的模式；自动切换已停用\n");
             report.append("修改次数=").append(changed);
             lastStatus = report.toString();
-            XposedBridge.log("Dual5G STANDALONE v0.3.9 policy: " + lastStatus);
+            XposedBridge.log("Dual5G STANDALONE v0.4.0 policy: " + lastStatus);
         } catch (SecurityException e) {
             lastStatus = "权限不足：电话进程 API 被 ROM 拒绝: " + e;
             XposedBridge.log("Dual5G permission failure " + e);
@@ -205,6 +209,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                     int voiceType = tm.getVoiceNetworkType();
                     b.append("当前数据网络：").append(networkName(dataType)).append("\n");
                     b.append("当前语音网络：").append(networkName(voiceType)).append("\n");
+                    b.append("当前连接频段：").append(liveBands(tm)).append("\n");
                     b.append("当前允许制式：").append(formatRats(mask)).append("（不是启用频段列表）\n");
                     b.append("提示：数据网络 UNKNOWN 不等于无信号，副卡未启用数据时可能返回 UNKNOWN\n");
                 } catch (Throwable t) {
@@ -217,6 +222,86 @@ public class PhoneHook implements IXposedHookLoadPackage {
             b.append("实时读取失败：").append(t).append("\n");
             XposedBridge.log("Dual5G snapshot error: " + t);
         }
+        return b.toString();
+    }
+
+    /** Live serving-cell band: query ServiceState only, never cache or use historical cell logs.
+     * The OEM may hide NetworkRegistrationInfo behind non-SDK access restrictions.
+     * A narrow parsing fallback uses the *current* ServiceState dump, not dumpsys history.
+     */
+    private static String liveBands(TelephonyManager tm) {
+        try {
+            ServiceState state = tm.getServiceState();
+            if (state == null) return "—（未上报 ServiceState）";
+            StringBuilder answer = new StringBuilder();
+            try {
+                Method method = ServiceState.class.getDeclaredMethod("getNetworkRegistrationInfoList");
+                method.setAccessible(true);
+                Object all = method.invoke(state);
+                if (all instanceof List) {
+                    for (Object info : (List<?>) all) {
+                        if (info == null) continue;
+                        String text = String.valueOf(info);
+                        if (!text.contains("transportType=WWAN") || !text.contains("domain=PS")) continue;
+                        if (!(text.contains("registrationState=HOME") || text.contains("registrationState=ROAMING"))) continue;
+                        Object cell = info.getClass().getMethod("getCellIdentity").invoke(info);
+                        if (cell instanceof CellIdentityNr) {
+                            CellIdentityNr nr = (CellIdentityNr) cell;
+                            return bandsText("N", nr.getBands(), nr.getNrarfcn(), "NR-ARFCN");
+                        }
+                        if (cell instanceof CellIdentityLte) {
+                            CellIdentityLte lte = (CellIdentityLte) cell;
+                            return bandsText("B", lte.getBands(), lte.getEarfcn(), "EARFCN");
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+                // Reflection restrictions vary by ColorOS build: parse this snapshot only.
+            }
+            String dump = state.toString();
+            Matcher m = Pattern.compile("NetworkRegistrationInfo\\{\\s*domain=PS\\s+transportType=WWAN(.*?)(?=NetworkRegistrationInfo\\{|\\]\\s*,?\\s*mNrFrequencyRange|$)", Pattern.DOTALL).matcher(dump);
+            while (m.find()) {
+                String ps = m.group(1);
+                if (!(ps.contains("registrationState=HOME") || ps.contains("registrationState=ROAMING"))) continue;
+                boolean nr = ps.contains("CellIdentityNr:");
+                boolean lte = ps.contains("CellIdentityLte:");
+                if (!nr && !lte) continue;
+                Matcher bm = Pattern.compile("mBands\\s*=\\s*\\[([^\\]]*)\\]").matcher(ps);
+                if (!bm.find()) continue;
+                StringBuilder bands = new StringBuilder();
+                for (String item : bm.group(1).split(",")) {
+                    try {
+                        int band = Integer.parseInt(item.trim());
+                        if (band <= 0) continue;
+                        if (bands.length() > 0) bands.append(" / ");
+                        bands.append(nr ? "N" : "B").append(band);
+                    } catch (NumberFormatException ignored) { }
+                }
+                if (bands.length() == 0) continue;
+                Matcher freq = Pattern.compile(nr ? "mNrArfcn\\s*=\\s*(\\d+)" : "mEarfcn\\s*=\\s*(\\d+)").matcher(ps);
+                if (freq.find()) {
+                    int channel = Integer.parseInt(freq.group(1));
+                    if (channel >= 0 && channel != Integer.MAX_VALUE)
+                        bands.append(" · ").append(nr ? "NR-ARFCN " : "EARFCN ").append(channel);
+                }
+                return bands.toString();
+            }
+            return "—（未上报有效注册频段）";
+        } catch (Throwable t) {
+            return "—（读取受限：" + t.getClass().getSimpleName() + "）";
+        }
+    }
+
+    private static String bandsText(String prefix, int[] bands, int channel, String channelName) {
+        if (bands == null || bands.length == 0) return "—（未上报 Band）";
+        StringBuilder b = new StringBuilder();
+        for (int band : bands) {
+            if (band <= 0) continue;
+            if (b.length() != 0) b.append(" / ");
+            b.append(prefix).append(band);
+        }
+        if (b.length() == 0) return "—（无有效 Band）";
+        if (channel >= 0 && channel != Integer.MAX_VALUE) b.append(" · ").append(channelName).append(" ").append(channel);
         return b.toString();
     }
 

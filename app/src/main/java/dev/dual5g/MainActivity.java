@@ -9,6 +9,8 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Gravity;
 import android.view.Window;
 import android.view.WindowInsets;
@@ -35,6 +37,15 @@ public class MainActivity extends Activity {
     private LinearLayout debugBox;
     private TextView bandReport, hardwareReport;
     private boolean expanded = false;
+    private final Handler liveHandler = new Handler(Looper.getMainLooper());
+    private boolean foreground = false;
+    private final Runnable livePoll = new Runnable() {
+        @Override public void run() {
+            if (!foreground) return;
+            sendQuietStatus();
+            liveHandler.postDelayed(this, 4000L);
+        }
+    };
     private boolean receiverRegistered = false;
     private final BroadcastReceiver updates = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -125,7 +136,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · com.android.phone     |     v0.3.9", 11, MUTED, false)
+        label(root, "LSPosed · com.android.phone     |     v0.4.0", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -143,12 +154,9 @@ public class MainActivity extends Activity {
         label(block, "硬件支持列表由上方官方规格提供。Android 未提供可靠的逐频段硬件能力枚举接口。", 12, MUTED, false);
         label(block, "② 当前启用", 13, BLUE, true).setPadding(0, dp(12), 0, 0);
         label(block, "可读取每张卡允许的 NR/LTE 等制式，但基带启用的全部 N/B Band 无通用接口，显示为「不可获取」。", 12, MUTED, false);
-        label(block, "③ 当前连接", 13, BLUE, true).setPadding(0, dp(12), 0, 0);
-        bandReport = label(block, "尚未读取。此操作只在手动点击时请求已注册小区信息。", 12, WHITE, false);
-        bandReport.setTextIsSelectable(true);
-        Button b = action(block, "⌁   读取当前连接频段", WHITE, 0xFF152845, "bands", true);
-        b.setContentDescription("只读查询当前注册基站频段");
-        label(block, "5G NSA 可能只显示 LTE 锚点；查询不到不表示不支持该频段。", 11, MUTED, false);
+        label(block, "③ 当前连接 · 自动刷新", 13, BLUE, true).setPadding(0, dp(12), 0, 0);
+        bandReport = label(block, "当前连接频段见上方双卡卡片，页面打开时每 4 秒刷新。", 12, WHITE, false);
+        label(block, "仅展示当前注册频段，不记录历史；5G NSA 可能只显示 LTE 锚点。", 11, MUTED, false);
     }
 
     private void updateBands(String raw) {
@@ -236,9 +244,11 @@ public class MainActivity extends Activity {
         TextView real=label(card,"数据  —",11,MUTED,false);
         real.setPadding(0,dp(5),0,dp(5));
         TextView voice=label(card,"语音  —",11,MUTED,false);
+        TextView band=label(card,"频段  —",12,BLUE,true);
+        band.setPadding(0,dp(7),0,0);
         TextView sub=label(card,"subId  —",10,MUTED,false);
         sub.setPadding(0,dp(9),0,0);
-        return new SimCard(card,pill,carrier,mode,real,voice,sub);
+        return new SimCard(card,pill,carrier,mode,real,voice,band,sub);
     }
 
     private void setEmptySlot(SimCard c) {
@@ -249,6 +259,7 @@ public class MainActivity extends Activity {
         c.mode.setTextColor(MUTED);
         c.real.setText("数据  —");
         c.voice.setText("语音  —");
+        c.band.setText("频段  —");
         c.sub.setText("subId  —");
         c.container.setAlpha(0.68f);
     }
@@ -277,6 +288,7 @@ public class MainActivity extends Activity {
             c.mode.setTextColor(hasNr ? GREEN : WHITE);
             c.real.setText("数据  "+field(section,"当前数据网络："));
             c.voice.setText("语音  "+field(section,"当前语音网络："));
+            c.band.setText("频段  "+field(section,"当前连接频段："));
             c.sub.setText("subId "+subId+" · Slot "+i);
         }
         if(count==0) {
@@ -302,9 +314,9 @@ public class MainActivity extends Activity {
     }
     private static class SimCard {
         final LinearLayout container;
-        final TextView pill,carrier,mode,real,voice,sub;
-        SimCard(LinearLayout box,TextView a,TextView b,TextView c,TextView d,TextView e,TextView f) {
-            container=box;pill=a;carrier=b;mode=c;real=d;voice=e;sub=f;
+        final TextView pill,carrier,mode,real,voice,band,sub;
+        SimCard(LinearLayout box,TextView a,TextView b,TextView c,TextView d,TextView e,TextView f,TextView g) {
+            container=box;pill=a;carrier=b;mode=c;real=d;voice=e;band=f;sub=g;
         }
     }
     private LinearLayout vertical(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
@@ -333,7 +345,27 @@ public class MainActivity extends Activity {
         Intent i=new Intent(PhoneHook.CONTROL).setPackage("com.android.phone");
         i.putExtra("command",command);sendBroadcast(i);
     }
-    @Override protected void onResume(){super.onResume();if(details!=null)send("status");}
+    private void sendQuietStatus() {
+        try {
+            Intent i = new Intent(PhoneHook.CONTROL).setPackage("com.android.phone");
+            i.putExtra("command", "status");
+            sendBroadcast(i);
+        } catch (RuntimeException e) {
+            android.util.Log.w("Dual5G-UI", "Live polling failed", e);
+        }
+    }
+    @Override protected void onResume() {
+        super.onResume();
+        foreground = true;
+        liveHandler.removeCallbacks(livePoll);
+        sendQuietStatus();
+        liveHandler.postDelayed(livePoll, 4000L);
+    }
+    @Override protected void onPause() {
+        foreground = false;
+        liveHandler.removeCallbacks(livePoll);
+        super.onPause();
+    }
     @Override protected void onDestroy(){
         if (receiverRegistered) {
             try { unregisterReceiver(updates); }
