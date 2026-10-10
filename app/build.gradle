@@ -6,8 +6,8 @@ android {
         applicationId 'dev.dual5g'
         minSdk 31
         targetSdk 35
-        versionCode 408
-        versionName '0.4.8-stable-ipc'
+        versionCode 409
+        versionName '0.4.9-band-fallback'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }

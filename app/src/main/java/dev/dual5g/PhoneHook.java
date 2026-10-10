@@ -14,12 +14,21 @@ import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
 import android.telephony.CellIdentityLte;
 import android.telephony.CellIdentityNr;
+import android.telephony.CellInfo;
+import android.telephony.CellInfoNr;
+import android.telephony.CellInfoLte;
 import android.telephony.ServiceState;
 import java.lang.reflect.Method;
 import java.util.regex.Pattern;
 import java.util.regex.Matcher;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.Callable;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -39,6 +48,12 @@ public class PhoneHook implements IXposedHookLoadPackage {
     private static volatile String lastStatus = "尚未同步";
     private static volatile String hardwareDiagnostic = "尚未检测（可点击检测设备无线能力）";
     private static final Runnable SYNC = () -> apply(false);
+    // Only for a bounded, best-effort serving-cell fallback. Never run potentially
+    // blocking OEM cell queries directly on the policy / IPC HandlerThread.
+    private static final ThreadPoolExecutor CELL_WORKER = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1),
+            r -> { Thread t = new Thread(r, "Dual5G-cell-read"); t.setDaemon(true); return t; },
+            new ThreadPoolExecutor.AbortPolicy());
 
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) {
         if (!"com.android.phone".equals(lp.packageName)) return;
@@ -96,7 +111,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.4.8 phone hook initialized; no su, no KSU module");
+        XposedBridge.log("Dual5G STANDALONE v0.4.9 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -224,6 +239,16 @@ public class PhoneHook implements IXposedHookLoadPackage {
      * A narrow parsing fallback uses the *current* ServiceState dump, not dumpsys history.
      */
     private static String liveBands(TelephonyManager tm) {
+        String primary = serviceStateBands(tm);
+        if (primary != null && !primary.startsWith("—")) return primary;
+        // Independently attempt registered cell information if the Android 16
+        // ServiceState snapshot is sanitized. Strict time limit + bounded worker.
+        String backup = registeredCellBands(tm);
+        if (backup != null && !backup.startsWith("—")) return backup;
+        return "—（ServiceState: " + primary + "；已注册小区: " + backup + "）";
+    }
+
+    private static String serviceStateBands(TelephonyManager tm) {
         try {
             ServiceState state;
             try {
@@ -312,6 +337,48 @@ public class PhoneHook implements IXposedHookLoadPackage {
             return "—（未上报有效注册频段）";
         } catch (Throwable t) {
             return "—（读取受限：" + t.getClass().getSimpleName() + "）";
+        }
+    }
+
+    /** Android may expose registered cell identity even when ServiceState is scrubbed.
+     * Only accept a registered cell; never infer from neighboring/unregistered cells.
+     * CellInfo may be cached by Android and is not an independent modem refresh.
+     */
+    private static String registeredCellBands(TelephonyManager tm) {
+        Future<String> future;
+        try {
+            future = CELL_WORKER.submit(() -> {
+                List<CellInfo> cells = tm.getAllCellInfo();
+                if (cells == null || cells.isEmpty()) return "—（小区列表为空/权限不足）";
+                for (CellInfo cell : cells) {
+                    if (cell == null || !cell.isRegistered()) continue;
+                    if (cell instanceof CellInfoNr) {
+                        android.telephony.CellIdentity identity = cell.getCellIdentity();
+                        if (identity instanceof CellIdentityNr) {
+                            CellIdentityNr nr = (CellIdentityNr) identity;
+                            String value = bandsText("N", nr.getBands(), nr.getNrarfcn(), "NR-ARFCN");
+                            if (!value.startsWith("—")) return value;
+                        }
+                    } else if (cell instanceof CellInfoLte) {
+                        CellIdentityLte lte = ((CellInfoLte) cell).getCellIdentity();
+                        String value = bandsText("B", lte.getBands(), lte.getEarfcn(), "EARFCN");
+                        if (!value.startsWith("—")) return value;
+                    }
+                }
+                return "—（未发现注册的 NR/LTE 小区频段）";
+            });
+        } catch (java.util.concurrent.RejectedExecutionException busy) {
+            return "—（读取线程忙）";
+        } catch (Throwable t) {
+            return "—（提交失败：" + t.getClass().getSimpleName() + "）";
+        }
+        try {
+            return future.get(650, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            return "—（650ms 超时）";
+        } catch (Throwable t) {
+            return "—（" + t.getClass().getSimpleName() + "）";
         }
     }
 

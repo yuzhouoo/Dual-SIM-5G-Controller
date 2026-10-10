@@ -1,12 +1,11 @@
-# Dual SIM 5G Controller v0.4.8 — Stable IPC
+# Dual SIM 5G Controller v0.4.9 — Band Fallback
 
-基线：**v0.3.5 的 PhoneHook 控制/回传广播、signature permission、自动切换逻辑**；沿用 v0.4.6 精简 UI、LSPosed 推荐作用域 `com.android.phone`、Root 重启电话服务与按钮冷却。
+基于 v0.4.8，**完全保留其控制广播、签名权限、自动 NR 切换、主界面与 LSPosed 推荐作用域**，仅修补当前频段读取。
 
-- **关键修复**：撤销 v0.4.2~v0.4.7 的接收者 UID 验证/空权限控制接收器，完全恢复 v0.3.5 的 `registerReceiver(..., PERMISSION, handler, RECEIVER_EXPORTED)`。
-- **状态字段兼容**：保留 v0.3.5 的运营商、subId、网络模式、数据/语音制式结构；每个已激活 SIM 新增独立 `当前连接频段`。读取失败返回 `—`，不影响其它字段。
-- **设备能力检测**：手动点击才读取 `getSupportedRadioAccessFamily()`；显示制式和原始 RAF，不冒充逐频段数据。
-- **QCI/5QI / 签约速率**：仅显示 `—` 占位，**不运行** DataNetworkController 的实验性反射。
-- **安全**：自动切换与控制命令均采用 v0.3.5 原签名权限机制；Root 重启电话服务仍需手动确认。
+1. 优先使用原有 ServiceState 已注册 PS/WWAN 小区获取 N/B 频段和 NR-ARFCN/EARFCN。
+2. ServiceState 没有返回频段时，尝试 `TelephonyManager.getAllCellInfo()` 中 `isRegistered()` 的 NR/LTE 小区，绝不读取邻区当作连接频段。
+3. 兜底读取在独立单线程上执行，最多等待 650ms；队列限制 1 项，避免故障拖慢电话进程主控制线程。
+4. 两条路径都失败时，在“当前连接频段”中返回失败原因，方便从调试面板判断是 API 数据缺失、权限还是超时。可能出现 Android 缓存中的最后注册小区，无法保证毫秒级切换同步。
+5. QCI/5QI 与上下行签约速率仍是占位符，没有加入不稳定的 OEM QoS 反射扫描。
 
-## 重要限制
-开发环境没有 Android SDK 完整编译工具链，也无法在真机上确认 LSPosed 注入效果。源码 ZIP 完整性检查不等于 APK 编译/实测通过。请通过 GitHub Actions 编译 APK，安装后在 LSPosed 中勾选 `com.android.phone` 并重启/重载对应进程后测试。避免在通信异常时频繁重启电话进程。
+**风险与验证**：未在设备 Android SDK 编译或真机运行。必须用 GitHub Actions 编译；切换前备份好可用源码。安装后需重新加载 `com.android.phone` 使新 Hook 生效。若频段仍然显示“—”，请贴出 APP 调试区中的“当前连接频段”完整一行；切勿误以为基站频段可以用官方硬件规格代替。
