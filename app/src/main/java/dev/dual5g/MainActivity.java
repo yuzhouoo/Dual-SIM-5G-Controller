@@ -43,12 +43,20 @@ public class MainActivity extends Activity {
         @Override public void run() {
             if (!foreground) return;
             sendQuietStatus();
+            if (lastReplyAt == 0L && details != null) {
+                details.setText("电话进程没有返回状态。请检查 LSPosed 模块是否启用并作用于 com.android.phone；随后重启手机。\n控制通信尚未建立，频段及设备检测无法工作。");
+            }
             liveHandler.postDelayed(this, 4000L);
         }
     };
     private boolean receiverRegistered = false;
+    private long lastReplyAt = 0L;
+    private long requestStartedAt = 0L;
+    private String ipcMessage = "尚未收到电话进程回应";
     private final BroadcastReceiver updates = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
+            lastReplyAt = android.os.SystemClock.elapsedRealtime();
+            ipcMessage = "通信正常，已收到电话进程回应";
             String raw = intent.getStringExtra("status");
             boolean enabled = intent.getBooleanExtra("enabled", true);
             status.setText(enabled ? "●  自动策略已启用" : "●  自动策略已停用");
@@ -136,7 +144,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · com.android.phone     |     v0.4.0", 11, MUTED, false)
+        label(root, "LSPosed · com.android.phone     |     v0.4.2", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -345,10 +353,23 @@ public class MainActivity extends Activity {
     }
     private int dp(int v){return (int)(v*getResources().getDisplayMetrics().density+0.5f);}
     private void send(String command){
+        requestStartedAt = android.os.SystemClock.elapsedRealtime();
         if(details!=null) details.setText("已发送 "+command+"，等待电话服务响应…\n如果持续无响应，请检查 LSPosed 作用域及日志。");
         if(updated!=null) updated.setText("正在请求电话服务…");
-        Intent i=new Intent(PhoneHook.CONTROL).setPackage("com.android.phone");
-        i.putExtra("command",command);sendBroadcast(i);
+        try {
+            Intent i=new Intent(PhoneHook.CONTROL).setPackage("com.android.phone");
+            i.putExtra("command",command);
+            sendBroadcast(i);
+            if ("hardware".equals(command)) {
+                liveHandler.postDelayed(() -> {
+                    if (hardwareReport != null && lastReplyAt < requestStartedAt) {
+                        hardwareReport.setText("通信超时：电话进程没有回复。请检查 LSPosed 作用域 com.android.phone、重启手机，并查看调试日志。\n本次未进行设备能力检测。");
+                    }
+                }, 6000L);
+            }
+        } catch (Throwable e) {
+            if (details != null) details.setText("广播发送失败：" + e);
+        }
     }
     private void sendQuietStatus() {
         try {

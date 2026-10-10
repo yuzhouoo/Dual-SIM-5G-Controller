@@ -7,6 +7,8 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.os.Build;
+import android.os.Process;
+import android.content.pm.PackageManager;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.telephony.SubscriptionInfo;
@@ -74,12 +76,27 @@ public class PhoneHook implements IXposedHookLoadPackage {
         // so other apps cannot issue privileged requests.
         application.registerReceiver(new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
+                // Android 16: verify the real sender UID, instead of relying on an
+                // app-defined signature permission which may not resolve in the phone UID.
+                try {
+                    int senderUid = getSentFromUid();
+                    int appUid = context.getPackageManager().getPackageUid("dev.dual5g", 0);
+                    if (senderUid != appUid && senderUid != Process.SYSTEM_UID && senderUid != 0) {
+                        XposedBridge.log("Dual5G rejected control sender uid=" + senderUid);
+                        return;
+                    }
+                } catch (Throwable verifyError) {
+                    XposedBridge.log("Dual5G cannot verify control sender: " + verifyError);
+                    return;
+                }
                 final String command = intent.getStringExtra("command");
                 handler.post(() -> {
                     try {
                         lastCommand = command == null ? "null" : command;
                         SharedPreferences prefs = prefs();
-                        if ("enable".equals(command)) {
+                        if ("ping".equals(command)) {
+                            lastStatus = "IPC PONG: 电话进程在线，UID 验证通过";
+                        } else if ("enable".equals(command)) {
                             prefs.edit().putBoolean("enabled", true).apply(); apply(false);
                         } else if ("disable".equals(command)) {
                             prefs.edit().putBoolean("enabled", false).apply();
@@ -102,8 +119,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
                     reply();
                 });
             }
-        }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.4.1 phone hook initialized; no su, no KSU module");
+        }, new IntentFilter(CONTROL), null, handler, Context.RECEIVER_EXPORTED);
+        XposedBridge.log("Dual5G STANDALONE v0.4.2 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -445,6 +462,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
             Intent out = new Intent(RESULT).setPackage("dev.dual5g");
             out.putExtra("status", snapshot());
             out.putExtra("enabled", prefs().getBoolean("enabled", true));
+            out.putExtra("replyId", System.currentTimeMillis());
             app.sendBroadcast(out);
         } catch (Throwable t) { XposedBridge.log("Dual5G reply failed " + t); }
     }

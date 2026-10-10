@@ -6,8 +6,8 @@ android {
         applicationId 'dev.dual5g'
         minSdk 31
         targetSdk 35
-        versionCode 401
-        versionName '0.4.1-live-bands-fix'
+        versionCode 402
+        versionName '0.4.2-ipc-repair'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }

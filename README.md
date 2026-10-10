@@ -1,9 +1,17 @@
-# v0.4.1 Live Bands Fix（实验版）
+# v0.4.2 IPC 修复测试版
 
-修复方向：Android 16 上 `getServiceState()` 返回的位置脱敏数据可能缺失 `CellIdentity`。优先 `getServiceState(TelephonyManager.INCLUDE_LOCATION_DATA_FINE)`，失败回退。尝试 NetworkRegistrationInfo 直取和解析当前快照。
+## 背景
+v0.4.1 三项同时失败：概览频段为空、能力检测无反馈、调试页没有接收指令。优先修复 APP 到 com.android.phone 的 IPC；频段读取路径仍需真机验证。
 
-设备能力按钮增加明确的请求反馈；电话进程回传增加“最后收到指令”以排查广播通道。若显示为 hardware，说明按钮已经送达；若停留在 status，检查作用域/权限。
+## 更改
+1. 控制广播接收端取消 APP 自定义 signature 权限过滤，改为 Android 16 getSentFromUid() 校验发送 UID 必须是 dev.dual5g（或系统 UID）。不允许其他第三方应用发出控制指令。
+2. 增加 `ping` 心跳指令，收到时报告 `IPC PONG`。在发送硬件检测后 6 秒没有电话进程回包时显示明确错误。
+3. 在前台首次定时查询仍无回包时，提示 LSPosed 作用域/重启检查。
+4. 不触碰已验证工作的自动双卡 5G/4G 政策算法；实时频段仍采用现有读取方式，可能因 ColorOS 受限而为空。
 
-**限制**：未在 OnePlus 12 或 Android SDK 上验证；这不是已确认修复。如频段仍空白，需要调试信息中的当前连接频段返回提示与最后收到指令。
+## 测试
+- 安装新 APK，确认 LSPosed 模块开启且作用域包含 `com.android.phone`，重启手机。
+- 打开 APP 查看是否存在「电话进程没有返回状态」；点击「检测设备无线能力」检查结果。
+- 如仍无响应，请获取 `adb logcat -d -v time | grep -iE 'Dual5G|FATAL EXCEPTION|BroadcastQueue' | tail -100`。
 
-仍然是单 APK LSPosed，无 KernelSU 模块，不保存频段历史。原有 5G 切换逻辑未修改。
+本工程未在当前环境编译或真机运行，仅完成源代码及 ZIP 检查。
