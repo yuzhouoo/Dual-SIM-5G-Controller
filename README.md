@@ -9,14 +9,3 @@
 - 保留 v0.3.1 的状态栏安全边距和 LSPosed PhoneHook，不修改核心切换逻辑。
 
 使用仓库内 GitHub Actions 构建 APK。注意：未在真实 Android 16 设备中编译/实测。
-
-
-## v0.3.3：显示注册小区频段
-
-- 在两个并排 SIM 卡片中分别显示 `NR N78 / N41` 和 `LTE B3 / B1`（真实值来自系统，不是示例值）。
-- 只展示 `CellInfo.isRegistered()` 的 LTE / NR 小区频段，不将邻区频段误报为当前驻留频段。
-- 双卡、单卡、无卡布局保持不变，空卡位显示 `—`。
-- Android 16 / ColorOS 可能不提供 NSA NR 小区详情。此时显示 `未上报`，不会从 LTE 频点推测 NR 频段。
-- 详情日志会同时显示 EARFCN / NR-ARFCN，用于进一步诊断。
-- 需要 LSPosed 作用域 `com.android.phone`，不需要额外 KernelSU 模块。
-- 本版本未完成 SDK 编译或真机验证。

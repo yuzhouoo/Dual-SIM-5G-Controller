@@ -6,7 +6,7 @@ android {
         applicationId 'dev.dual5g'
         minSdk 31
         targetSdk 35
-        versionCode 303
+        versionCode 302
         versionName '0.3.2-standalone'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }

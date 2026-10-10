@@ -12,13 +12,6 @@ import android.os.HandlerThread;
 import android.telephony.SubscriptionInfo;
 import android.telephony.SubscriptionManager;
 import android.telephony.TelephonyManager;
-import android.telephony.CellInfo;
-import android.telephony.CellInfoNr;
-import android.telephony.CellInfoLte;
-import android.telephony.CellIdentityNr;
-import android.telephony.CellIdentityLte;
-import java.util.LinkedHashSet;
-import java.util.Set;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -92,7 +85,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.3.3 phone hook initialized; no su, no KSU module");
+        XposedBridge.log("Dual5G STANDALONE v0.2.4 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -154,7 +147,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
             if (restore) report.append("已尝试恢复首次接管时备份的模式；自动切换已停用\n");
             report.append("修改次数=").append(changed);
             lastStatus = report.toString();
-            XposedBridge.log("Dual5G STANDALONE v0.3.3 policy: " + lastStatus);
+            XposedBridge.log("Dual5G STANDALONE v0.2.4 policy: " + lastStatus);
         } catch (SecurityException e) {
             lastStatus = "权限不足：电话进程 API 被 ROM 拒绝: " + e;
             XposedBridge.log("Dual5G permission failure " + e);
@@ -198,7 +191,6 @@ public class PhoneHook implements IXposedHookLoadPackage {
                     int voiceType = tm.getVoiceNetworkType();
                     b.append("当前数据网络：").append(networkName(dataType)).append("\n");
                     b.append("当前语音网络：").append(networkName(voiceType)).append("\n");
-                    appendServingBands(b, tm);
                     b.append("提示：数据网络 UNKNOWN 不等于无信号，副卡未启用数据时可能返回 UNKNOWN\n");
                 } catch (Throwable t) {
                     b.append("读取该卡失败：").append(t.getClass().getSimpleName())
@@ -211,38 +203,6 @@ public class PhoneHook implements IXposedHookLoadPackage {
             XposedBridge.log("Dual5G snapshot error: " + t);
         }
         return b.toString();
-    }
-
-    /** Reports only bands from registered cells. LTE anchor is not an NR serving-band claim. */
-    private static void appendServingBands(StringBuilder b, TelephonyManager tm) {
-        Set<String> nr = new LinkedHashSet<>();
-        Set<String> lte = new LinkedHashSet<>();
-        Set<String> channels = new LinkedHashSet<>();
-        String error = null;
-        try {
-            // May be a cached result, or empty when the modem/ROM masks cell details.
-            List<CellInfo> cells = tm.getAllCellInfo();
-            if (cells != null) for (CellInfo cell : cells) {
-                if (cell == null || !cell.isRegistered()) continue;
-                if (cell instanceof CellInfoNr) {
-                    CellIdentityNr identity = (CellIdentityNr) cell.getCellIdentity();
-                    for (int band : identity.getBands()) if (band > 0) nr.add("N" + band);
-                    int arfcn = identity.getNrarfcn();
-                    if (arfcn != CellInfo.UNAVAILABLE) channels.add("NR-ARFCN=" + arfcn);
-                } else if (cell instanceof CellInfoLte) {
-                    CellIdentityLte identity = (CellIdentityLte) cell.getCellIdentity();
-                    for (int band : identity.getBands()) if (band > 0) lte.add("B" + band);
-                    int arfcn = identity.getEarfcn();
-                    if (arfcn != CellInfo.UNAVAILABLE) channels.add("EARFCN=" + arfcn);
-                }
-            }
-        } catch (SecurityException e) { error = "权限不足"; }
-          catch (Throwable e) { error = e.getClass().getSimpleName(); }
-        b.append("当前 NR 频段：").append(nr.isEmpty() ? "未上报" : android.text.TextUtils.join(" / ", nr)).append("\n");
-        b.append("当前 LTE 频段：").append(lte.isEmpty() ? "未上报" : android.text.TextUtils.join(" / ", lte)).append("\n");
-        b.append("小区频点：").append(channels.isEmpty() ? "未上报" : android.text.TextUtils.join(" / ", channels)).append("\n");
-        if (error != null) b.append("频段读取状态：").append(error).append("\n");
-        b.append("频段说明：仅已注册小区；NSA 模式可能只上报 LTE 锚点\n");
     }
 
     private static String networkName(int type) {

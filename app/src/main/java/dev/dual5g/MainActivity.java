@@ -132,7 +132,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · com.android.phone     |     v0.3.3", 11, MUTED, false)
+        label(root, "LSPosed · com.android.phone     |     v0.3.2", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
     }
@@ -158,12 +158,9 @@ public class MainActivity extends Activity {
         TextView real=label(card,"数据  —",11,MUTED,false);
         real.setPadding(0,dp(5),0,dp(5));
         TextView voice=label(card,"语音  —",11,MUTED,false);
-        TextView bandNr=label(card,"NR   —",11,GREEN,true);
-        bandNr.setPadding(0, dp(9), 0, dp(3));
-        TextView bandLte=label(card,"LTE  —",11,MUTED,false);
         TextView sub=label(card,"subId  —",10,MUTED,false);
         sub.setPadding(0,dp(9),0,0);
-        return new SimCard(card,pill,carrier,mode,real,voice,bandNr,bandLte,sub);
+        return new SimCard(card,pill,carrier,mode,real,voice,sub);
     }
 
     private void setEmptySlot(SimCard c) {
@@ -174,8 +171,6 @@ public class MainActivity extends Activity {
         c.mode.setTextColor(MUTED);
         c.real.setText("数据  —");
         c.voice.setText("语音  —");
-        c.bandNr.setText("NR   —");
-        c.bandLte.setText("LTE  —");
         c.sub.setText("subId  —");
         c.container.setAlpha(0.68f);
     }
@@ -204,8 +199,6 @@ public class MainActivity extends Activity {
             c.mode.setTextColor(hasNr ? GREEN : WHITE);
             c.real.setText("数据  "+field(section,"当前数据网络："));
             c.voice.setText("语音  "+field(section,"当前语音网络："));
-            c.bandNr.setText("NR   "+field(section,"当前 NR 频段："));
-            c.bandLte.setText("LTE  "+field(section,"当前 LTE 频段："));
             c.sub.setText("subId "+subId+" · Slot "+i);
         }
         if(count==0) {
@@ -231,9 +224,9 @@ public class MainActivity extends Activity {
     }
     private static class SimCard {
         final LinearLayout container;
-        final TextView pill,carrier,mode,real,voice,bandNr,bandLte,sub;
-        SimCard(LinearLayout box,TextView a,TextView b,TextView c,TextView d,TextView e,TextView nr,TextView lte,TextView f) {
-            container=box;pill=a;carrier=b;mode=c;real=d;voice=e;bandNr=nr;bandLte=lte;sub=f;
+        final TextView pill,carrier,mode,real,voice,sub;
+        SimCard(LinearLayout box,TextView a,TextView b,TextView c,TextView d,TextView e,TextView f) {
+            container=box;pill=a;carrier=b;mode=c;real=d;voice=e;sub=f;
         }
     }
     private LinearLayout vertical(){LinearLayout l=new LinearLayout(this);l.setOrientation(1);return l;}
