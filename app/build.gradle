@@ -6,8 +6,8 @@ android {
         applicationId 'dev.dual5g'
         minSdk 31
         targetSdk 35
-        versionCode 406
-        versionName '0.4.6-compact-overview'
+        versionCode 407
+        versionName '0.4.7-readonly-ipc-fix'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }

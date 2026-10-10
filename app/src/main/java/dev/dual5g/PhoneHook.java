@@ -76,20 +76,26 @@ public class PhoneHook implements IXposedHookLoadPackage {
         // so other apps cannot issue privileged requests.
         application.registerReceiver(new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) {
-                // Android 16: verify the real sender UID, instead of relying on an
-                // app-defined signature permission which may not resolve in the phone UID.
+                // Do not let an unavailable sender UID break read-only diagnostics.
+                // Android's getSentFromUid() may return -1 when identity isn't attached.
+                // Such broadcasts can ONLY query status, never change radio settings.
+                final String command = intent.getStringExtra("command");
+                boolean senderTrusted = false;
                 try {
                     int senderUid = getSentFromUid();
                     int appUid = context.getPackageManager().getPackageUid("dev.dual5g", 0);
-                    if (senderUid != appUid && senderUid != Process.SYSTEM_UID && senderUid != 0) {
-                        XposedBridge.log("Dual5G rejected control sender uid=" + senderUid);
-                        return;
+                    senderTrusted = senderUid == appUid || senderUid == Process.SYSTEM_UID || senderUid == 0;
+                    if (!senderTrusted) {
+                        XposedBridge.log("Dual5G unverified sender uid=" + senderUid + ", cmd=" + command);
                     }
                 } catch (Throwable verifyError) {
-                    XposedBridge.log("Dual5G cannot verify control sender: " + verifyError);
+                    XposedBridge.log("Dual5G sender UID unavailable: " + verifyError);
+                }
+                if (!senderTrusted && !("status".equals(command) || "ping".equals(command)
+                        || "hardware".equals(command) || "bands".equals(command))) {
+                    XposedBridge.log("Dual5G rejected privileged command without verified UID: " + command);
                     return;
                 }
-                final String command = intent.getStringExtra("command");
                 handler.post(() -> {
                     try {
                         lastCommand = command == null ? "null" : command;
@@ -120,7 +126,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), null, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.4.2 phone hook initialized; no su, no KSU module");
+        XposedBridge.log("Dual5G STANDALONE v0.4.7 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
