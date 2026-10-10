@@ -1,51 +1,22 @@
-# v0.2.4 编译修复
+# Dual SIM 5G Controller v0.3.2
 
-移除 PhoneHook.java 中对非公开 SDK 常量 `TelephonyManager.NETWORK_TYPE_LTE_CA` 的引用；其他逻辑保持不变。
+在 v0.3.1 基础上仅重排 SIM 网络概览：两个等宽卡片并排展示，适配双卡、单卡和无卡。
 
-# Dual SIM 5G Controller — Standalone LSPosed APK v0.2.0
+- 有卡：显示运营商、默认数据卡、5G/4G 允许模式、当前数据/语音网络。
+- 空卡槽：显示“未插卡 / 无 SIM”，保留占位卡片。
+- 两卡均无：顶部显示“未检测到活动 SIM”，两张空卡片。
+- 实际数据网络 UNKNOWN 不等于无信号。
+- 保留 v0.3.1 的状态栏安全边距和 LSPosed PhoneHook，不修改核心切换逻辑。
 
-Single APK. **No KernelSU module, no `su` command, no root shell in the APK.** Requires installed and working LSPosed framework (rooted phone). Targets `com.android.phone` using Legacy Xposed API.
-
-## Behavior
-
-- Registers broadcasts in `com.android.phone` after `Application.attach()`.
-- Changes `TelephonyManager.setAllowedNetworkTypesForReason(USER, mask)` from the privileged phone process.
-- Data SIM gets NR bit enabled; other active SIMs get NR bit cleared, preserving all other bits.
-- Listens for data subscription/SIM changes; delays writes 1.5s, runs once on phone process startup.
-- Main app communicates with hook over signature-protected broadcast; does not call `su`.
-- Stores the first-seen user reason bitmask **inside the phone process** keyed by subId; restore does not imply factory defaults (you already changed both SIM masks manually).
-
-## Build
-
-GitHub Actions > Build Standalone LSPosed APK > Run workflow > Artifact `DualSim5G-Standalone-APK`.
-
-## Install
-
-1. Uninstall the previous `dev.dual5g` APK then install the new one. Disabling the old module before updating is recommended. No separate root module is needed.
-2. LSPosed: enable module, select `com.android.phone` only. Reboot phone.
-3. Open app, `读取状态` and `启用并立即同步`.
-4. Switch default data SIM in ColorOS and verify the modes using `cmd phone get-allowed-network-types-for-users -s 0` and `-s 1`.
-
-## Caveats
-
-- **Not device tested.** ColorOS 16 may restrict access even from `com.android.phone` or override allowed network types. Review LSPosed log `Dual5G` if it fails. `MODIFY_PHONE_STATE` and `READ_PRIVILEGED_PHONE_STATE` are normally granted to the phone process, but this assumption needs testing on your ROM.
-- The signature-protected runtime receiver accepts only requests from apps signed with this APK's key. Debug APK rebuilding with a different key changes the trusted sender.
-- In case of permission denial, the app will show the reported error. There is no `su` fallback.
-- Restarting `com.android.phone` can temporarily disconnect cellular service; prefer reboot.
-- If the previous KernelSU module was installed, disable/uninstall it to prevent conflicting changes.
-- No network setting can guarantee 5G radio registration; it only changes allowed RAT.
+使用仓库内 GitHub Actions 构建 APK。注意：未在真实 Android 16 设备中编译/实测。
 
 
-## v0.2.1 诊断说明
+## v0.3.3：显示注册小区频段
 
-- 这是无 su 的独立 LSPosed APK；不需要安装 KernelSU 模块。
-- 启动后的 LSPosed 模块日志应包含 `Dual5G STANDALONE v0.2.1 phone hook initialized`。
-- 如果仍出现 `Dual5G immediate trigger unavailable (daemon remains active)`，说明运行中的仍是此前旧版 Hook；检查安装包版本、LSPosed 启用的模块并重启电话进程/设备。
-- 建议在系统设置中卸载旧版 `dev.dual5g`，安装此 APK，重新启用 LSPosed 作用域 `com.android.phone` 后重启手机。
-- 单 APK 方案在 ColorOS 16 的权限与广播交互仍需要实机验证。
-
-## v0.2.2 调试面板
-
-打开 APK 点击「刷新网络状态」可查看每张活动 SIM 的卡槽、运营商、订阅 ID、是否为默认数据卡、用户允许 NR 与否、实时数据/语音网络类型及最近同步结果。
-
-注意：网络掩码表示允许的制式，不代表当前实际驻网；部分 5G NSA 场景数据网络类型也可能显示 LTE。电话进程需要读取电话服务状态的权限。该版只需要 APK + LSPosed，不需要额外 KernelSU 模块，也不会调用 su。
+- 在两个并排 SIM 卡片中分别显示 `NR N78 / N41` 和 `LTE B3 / B1`（真实值来自系统，不是示例值）。
+- 只展示 `CellInfo.isRegistered()` 的 LTE / NR 小区频段，不将邻区频段误报为当前驻留频段。
+- 双卡、单卡、无卡布局保持不变，空卡位显示 `—`。
+- Android 16 / ColorOS 可能不提供 NSA NR 小区详情。此时显示 `未上报`，不会从 LTE 频点推测 NR 频段。
+- 详情日志会同时显示 EARFCN / NR-ARFCN，用于进一步诊断。
+- 需要 LSPosed 作用域 `com.android.phone`，不需要额外 KernelSU 模块。
+- 本版本未完成 SDK 编译或真机验证。
