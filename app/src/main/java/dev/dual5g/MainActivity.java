@@ -30,7 +30,7 @@ public class MainActivity extends Activity {
         l.setOrientation(LinearLayout.VERTICAL);
         l.setPadding(30, 32, 30, 24);
         TextView t = new TextView(this);
-        t.setText("Dual SIM 5G Controller 0.2.2 STANDALONE\n单 APK · 无需 KernelSU 模块 / su\n\n"
+        t.setText("Dual SIM 5G Controller 0.2.3 STANDALONE\n单 APK · 无需 KernelSU 模块 / su\n\n"
                 + "数据卡：允许 5G (NR)\n非数据卡：关闭 NR，保留 4G/3G/2G\n\n"
                 + "需要在 LSPosed 中启用模块，并勾选『电话服务 com.android.phone』作用域，然后重启手机。\n"
                 + "第一次修改网络设置前请先确认两张卡都能正常通话。\n");
@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
         add(l, "恢复首次接管前的模式", "restore");
         output = new TextView(this);
         output.setTextIsSelectable(true); output.setTextSize(15);
-        output.setText("等待电话进程响应…\n调试版本 v0.2.2");
+        output.setText("等待电话进程响应…\n调试版本 v0.2.3");
         l.addView(output);
         ScrollView scroll = new ScrollView(this); scroll.addView(l); setContentView(scroll);
         registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
