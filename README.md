@@ -30,3 +30,18 @@ GitHub Actions > Build Standalone LSPosed APK > Run workflow > Artifact `DualSim
 - Restarting `com.android.phone` can temporarily disconnect cellular service; prefer reboot.
 - If the previous KernelSU module was installed, disable/uninstall it to prevent conflicting changes.
 - No network setting can guarantee 5G radio registration; it only changes allowed RAT.
+
+
+## v0.2.1 诊断说明
+
+- 这是无 su 的独立 LSPosed APK；不需要安装 KernelSU 模块。
+- 启动后的 LSPosed 模块日志应包含 `Dual5G STANDALONE v0.2.1 phone hook initialized`。
+- 如果仍出现 `Dual5G immediate trigger unavailable (daemon remains active)`，说明运行中的仍是此前旧版 Hook；检查安装包版本、LSPosed 启用的模块并重启电话进程/设备。
+- 建议在系统设置中卸载旧版 `dev.dual5g`，安装此 APK，重新启用 LSPosed 作用域 `com.android.phone` 后重启手机。
+- 单 APK 方案在 ColorOS 16 的权限与广播交互仍需要实机验证。
+
+## v0.2.2 调试面板
+
+打开 APK 点击「刷新网络状态」可查看每张活动 SIM 的卡槽、运营商、订阅 ID、是否为默认数据卡、用户允许 NR 与否、实时数据/语音网络类型及最近同步结果。
+
+注意：网络掩码表示允许的制式，不代表当前实际驻网；部分 5G NSA 场景数据网络类型也可能显示 LTE。电话进程需要读取电话服务状态的权限。该版只需要 APK + LSPosed，不需要额外 KernelSU 模块，也不会调用 su。

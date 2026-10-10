@@ -85,7 +85,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G phone hook initialized, permission-based control enabled");
+        XposedBridge.log("Dual5G STANDALONE v0.2.2 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -147,7 +147,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
             if (restore) report.append("已尝试恢复首次接管时备份的模式；自动切换已停用\n");
             report.append("修改次数=").append(changed);
             lastStatus = report.toString();
-            XposedBridge.log("Dual5G " + lastStatus);
+            XposedBridge.log("Dual5G STANDALONE v0.2.2 policy: " + lastStatus);
         } catch (SecurityException e) {
             lastStatus = "权限不足：电话进程 API 被 ROM 拒绝: " + e;
             XposedBridge.log("Dual5G permission failure " + e);
@@ -157,10 +157,74 @@ public class PhoneHook implements IXposedHookLoadPackage {
         }
     }
 
+    /** Fresh, read-only diagnostics. Runs in the privileged phone process. */
+    private static String snapshot() {
+        StringBuilder b = new StringBuilder();
+        b.append("【实时双卡网络状态】\n");
+        b.append("最近操作：").append(lastStatus).append("\n\n");
+        try {
+            int dataId = SubscriptionManager.getDefaultDataSubscriptionId();
+            SubscriptionManager sm = app.getSystemService(SubscriptionManager.class);
+            TelephonyManager base = app.getSystemService(TelephonyManager.class);
+            if (sm == null || base == null) return b.append("电话服务未就绪").toString();
+            List<SubscriptionInfo> subs = sm.getActiveSubscriptionInfoList();
+            if (subs == null || subs.isEmpty()) return b.append("未发现活动 SIM 卡").toString();
+            b.append("默认数据订阅 ID：").append(dataId).append("\n");
+            boolean matched = false;
+            for (SubscriptionInfo si : subs) {
+                int slot = si.getSimSlotIndex();
+                if (slot < 0) continue;
+                int id = si.getSubscriptionId();
+                boolean activeData = id == dataId;
+                matched |= activeData;
+                b.append("\n──── 卡 ").append(slot + 1).append(" (Slot ").append(slot).append(") ────\n");
+                b.append("运营商：").append(si.getCarrierName()).append("\n");
+                b.append("订阅 ID：").append(id).append("\n");
+                b.append("当前上网卡：").append(activeData ? "是 ★" : "否").append("\n");
+                try {
+                    TelephonyManager tm = base.createForSubscriptionId(id);
+                    long mask = tm.getAllowedNetworkTypesForReason(USER);
+                    b.append("网络模式：").append((mask & NR) != 0 ? "允许 5G (NR)" : "最高 4G（未允许 NR）").append("\n");
+                    b.append("用户网络掩码：").append(mask).append(" (0x")
+                            .append(Long.toHexString(mask)).append(")\n");
+                    int dataType = tm.getDataNetworkType();
+                    int voiceType = tm.getVoiceNetworkType();
+                    b.append("当前数据网络：").append(networkName(dataType)).append("\n");
+                    b.append("当前语音网络：").append(networkName(voiceType)).append("\n");
+                    b.append("提示：数据网络 UNKNOWN 不等于无信号，副卡未启用数据时可能返回 UNKNOWN\n");
+                } catch (Throwable t) {
+                    b.append("读取该卡失败：").append(t.getClass().getSimpleName())
+                            .append(": ").append(t.getMessage()).append("\n");
+                }
+            }
+            if (!matched) b.append("\n警告：默认上网卡未匹配任何活动卡槽\n");
+        } catch (Throwable t) {
+            b.append("实时读取失败：").append(t).append("\n");
+            XposedBridge.log("Dual5G snapshot error: " + t);
+        }
+        return b.toString();
+    }
+
+    private static String networkName(int type) {
+        switch (type) {
+            case TelephonyManager.NETWORK_TYPE_NR: return "5G NR";
+            case TelephonyManager.NETWORK_TYPE_LTE: return "4G LTE";
+            case TelephonyManager.NETWORK_TYPE_LTE_CA: return "4G LTE_CA";
+            case TelephonyManager.NETWORK_TYPE_UMTS: return "3G UMTS";
+            case TelephonyManager.NETWORK_TYPE_HSPA: return "3G HSPA";
+            case TelephonyManager.NETWORK_TYPE_HSPAP: return "3G HSPA+";
+            case TelephonyManager.NETWORK_TYPE_EDGE: return "2G EDGE";
+            case TelephonyManager.NETWORK_TYPE_GPRS: return "2G GPRS";
+            case TelephonyManager.NETWORK_TYPE_GSM: return "2G GSM";
+            case TelephonyManager.NETWORK_TYPE_UNKNOWN: return "UNKNOWN / 未知";
+            default: return TelephonyManager.getNetworkTypeName(type) + " (" + type + ")";
+        }
+    }
+
     private static void reply() {
         try {
             Intent out = new Intent(RESULT).setPackage("dev.dual5g");
-            out.putExtra("status", lastStatus);
+            out.putExtra("status", snapshot());
             out.putExtra("enabled", prefs().getBoolean("enabled", true));
             app.sendBroadcast(out);
         } catch (Throwable t) { XposedBridge.log("Dual5G reply failed " + t); }
