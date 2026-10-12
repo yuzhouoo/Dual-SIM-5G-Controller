@@ -121,7 +121,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.5.1 phone hook initialized; no su, no KSU module");
+        XposedBridge.log("Dual5G STANDALONE v0.5.2 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -431,7 +431,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 if (h != null) h.post(() -> {
                     if (qosToken != token) return; // stale completion ignored
                     QCI_VALUES[0] = result[0]; QCI_VALUES[1] = result[1];
-                    qosDiagnostic = "检测完成；仅代表已建立数据承载的 QoS，非套餐优先级";
+                    qosDiagnostic = "检测完成：SIM1 " + result[0] + "；SIM2 " + result[1]
+                            + "（数据来自当前承载；不是运营商套餐优先级）";
                     reply();
                 });
             });
@@ -441,16 +442,24 @@ public class PhoneHook implements IXposedHookLoadPackage {
         }
     }
 
+    /** Inspect only already existing QoS objects; never invoke RIL requests or change modem state.
+     * Report the missing link explicitly so a non-result is not mistaken for a dead button.
+     */
     private static String readQciSlot(int slot) {
         try {
             Class<?> factory = Class.forName("com.android.internal.telephony.PhoneFactory");
             Method getPhone = factory.getDeclaredMethod("getPhone", int.class);
             getPhone.setAccessible(true);
             Object phone = getPhone.invoke(null, slot);
+            if (phone == null) return "—（卡槽电话对象为空）";
             Object controller = callIfPresent(phone, "getDataNetworkController");
+            if (controller == null) return "—（系统未开放数据网络控制器）";
             Object networks = callIfPresent(controller, "getDataNetworkList");
-            if (!(networks instanceof Iterable)) return "—（接口未提供）";
+            if (networks == null) networks = callIfPresent(controller, "getDataNetworks");
+            if (!(networks instanceof Iterable)) return "—（当前 ROM 未提供承载列表）";
+            int count = 0;
             for (Object network : (Iterable<?>) networks) {
+                count++;
                 Object response = callIfPresent(network, "getDataCallResponse");
                 Object qos = callIfPresent(response, "getDefaultQos");
                 if (qos == null) qos = callIfPresent(network, "getDefaultQos");
@@ -461,7 +470,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 if (qci instanceof Number && ((Number)qci).intValue() > 0)
                     return "QCI " + qci + standardPriority(((Number) qci).intValue(), false);
             }
-            return "—（未上报）";
+            return count == 0 ? "—（无活动数据承载）" : "—（" + count + " 条承载未上报 QCI/5QI）";
         } catch (Throwable ex) { return "—（" + ex.getClass().getSimpleName() + "）"; }
     }
 

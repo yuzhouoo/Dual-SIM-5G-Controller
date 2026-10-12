@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
     private static final int BG=0xFF0B1120, PANEL=0xFF172238, STROKE=0xFF29384F;
     private static final int WHITE=0xFFF3F7FF, MUTED=0xFFA1B2CD, GREEN=0xFF5DE2B1, BLUE=0xFF6EA9FF;
-    private TextView status, updated, details, heading;
+    private TextView status, updated, details, heading, qciResult;
     private LinearLayout overviewRow;
     private final SimCard[] sims = new SimCard[2];
     private LinearLayout debugBox;
@@ -65,6 +65,10 @@ public class MainActivity extends Activity {
             updated.setText("（最后更新时间：" + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date()) + "）");
             if (raw == null) raw = "电话进程未提供状态数据";
             details.setText(raw);
+            if (qciResult != null) {
+                String diagnosis = field(raw, "QCI 检测状态：");
+                qciResult.setText("QCI 检测：" + (diagnosis.isEmpty() ? "电话服务未提供诊断状态" : diagnosis));
+            }
             showStatus(raw);
         }
     };
@@ -134,6 +138,8 @@ public class MainActivity extends Activity {
         action(secondary, "恢复原始模式", 0xFFFFB4AA, PANEL, "restore", false);
         Button qciButton = action(root, "⌁   读取 QCI / 5QI（实验性）", BLUE, PANEL, "qci", true);
         qciButton.setContentDescription("仅按需尝试获取当前数据连接的 QCI 或 5QI；不参与实时刷新");
+        qciResult = label(root, "QCI 检测：尚未检测", 12, MUTED, false);
+        qciResult.setPadding(dp(4), dp(6), dp(4), dp(8));
         Button restart = action(root, "⟳   重启电话服务（Root）", 0xFFFFB4AA, 0xFF39202A, "restart-phone", true);
         restart.setContentDescription("确认后使用 Root 重启电话进程，可能会暂时断网");
 
@@ -149,7 +155,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.1", 11, MUTED, false)
+        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.2", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -294,6 +300,9 @@ public class MainActivity extends Activity {
         b.setOnClickListener(v -> {
             if ("restart-phone".equals(command)) { confirmRestartPhone(b); return; }
             lockButton(b);
+            if ("qci".equals(command) && qciResult != null) {
+                qciResult.setText("QCI 检测：请求已发送，等待电话进程回应…");
+            }
             send(command);
         });
         return b;
