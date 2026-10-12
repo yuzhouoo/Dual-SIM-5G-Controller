@@ -54,6 +54,8 @@ public class MainActivity extends Activity {
     private boolean receiverRegistered = false;
     private TextView nasProbeResult;
     private TextView rfProbeResult;
+    private TextView qosRootResult;
+    private boolean qosRootStarted = false;
     private boolean rfAutoStarted = false;
     private boolean nasAutoStarted = false;
     private boolean dmsAutoStarted = false;
@@ -159,6 +161,10 @@ public class MainActivity extends Activity {
         LinearLayout rfPanel = panel(root, dp(14), dp(12));
         rfProbeResult = label(rfPanel, "准备自动读取当前射频活动信息…", 12, MUTED, false);
         rfProbeResult.setTextIsSelectable(true);
+        label(root, "基站数据承载 / QoS 诊断（只读）", 17, WHITE, true).setPadding(0, dp(18), 0, dp(8));
+        LinearLayout qosRootPanel = panel(root, dp(14), dp(12));
+        qosRootResult = label(qosRootPanel, "准备自动检查 QCI、5QI 及网络下发速率…", 12, MUTED, false);
+        qosRootResult.setTextIsSelectable(true);
         Button restart = action(root, "⟳   重启电话服务（Root）", 0xFFFFB4AA, 0xFF39202A, "restart-phone", true);
         restart.setContentDescription("确认后使用 Root 重启电话进程，可能会暂时断网");
 
@@ -174,7 +180,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.7", 11, MUTED, false)
+        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.9", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -616,7 +622,19 @@ public class MainActivity extends Activity {
         autoReadDmsBands();
         autoReadNasPreference();
         autoReadRfBands();
+        autoReadQosDiagnostics();
     }
+    private void autoReadQosDiagnostics() {
+        if (qosRootStarted || qosRootResult == null) return;
+        qosRootStarted = true;
+        new Thread(() -> {
+            final String result = QosDiagnostics.read();
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed() && qosRootResult != null) qosRootResult.setText(result);
+            });
+        }, "Dual5G-QosReadOnly").start();
+    }
+
     @Override protected void onPause() {
         foreground = false;
         liveHandler.removeCallbacks(livePoll);
