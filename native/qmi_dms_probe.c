@@ -35,13 +35,23 @@ int main(void){
  struct timeval tv={.tv_sec=3,.tv_usec=0};
  setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&tv,sizeof(tv));
  setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&tv,sizeof(tv));
- struct sockaddr_qrtr_local local={.sq_family=AF_QIPCRTR,.sq_node=0,.sq_port=0};
- if(bind(fd,(struct sockaddr*)&local,sizeof(local))<0){printf("ERROR bind errno=%d %s\n",errno,strerror(errno));close(fd);return 11;}
+ /* Do not bind with sq_node=0: on some Android kernels the local QRTR
+  * node is not 0, and an explicit bind then fails with EINVAL. The kernel
+  * auto-binds an ephemeral local port on first sendto(). */
+ struct sockaddr_qrtr_local local={0};
+ socklen_t local_len=sizeof(local);
+ if(getsockname(fd,(struct sockaddr*)&local,&local_len)==0)
+   printf("Local QRTR socket pre-send: node=%u port=%u\n",local.sq_node,local.sq_port);
+ else
+   printf("INFO getsockname pre-send errno=%d %s\n",errno,strerror(errno));
  struct sockaddr_qrtr_local dst={.sq_family=AF_QIPCRTR,.sq_node=0,.sq_port=119};
  const unsigned char msg[]={0x00,0x01,0x00,0x45,0x00,0x00,0x00};
  if(sendto(fd,msg,sizeof(msg),0,(struct sockaddr*)&dst,sizeof(dst))!=(ssize_t)sizeof(msg)){
    printf("ERROR sendto errno=%d %s\n",errno,strerror(errno));close(fd);return 12;
  }
+ local_len=sizeof(local);
+ if(getsockname(fd,(struct sockaddr*)&local,&local_len)==0)
+   printf("Local QRTR auto-bound: node=%u port=%u\n",local.sq_node,local.sq_port);
  unsigned char buf[4096]; struct sockaddr_qrtr_local peer; socklen_t peerlen=sizeof(peer);
  ssize_t nr=recvfrom(fd,buf,sizeof(buf),0,(struct sockaddr*)&peer,&peerlen);close(fd);
  if(nr<0){printf("ERROR recvfrom errno=%d %s\n",errno,strerror(errno));return 13;}
