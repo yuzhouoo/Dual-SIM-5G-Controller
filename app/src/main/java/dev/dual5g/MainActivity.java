@@ -52,6 +52,8 @@ public class MainActivity extends Activity {
         }
     };
     private boolean receiverRegistered = false;
+    private TextView nasProbeResult;
+    private boolean nasAutoStarted = false;
     private boolean dmsAutoStarted = false;
     private volatile boolean dmsInFlight = false;
     private long dmsLastAttemptAt = 0L;
@@ -147,6 +149,10 @@ public class MainActivity extends Activity {
         LinearLayout dmsPanel = panel(root, dp(14), dp(12));
         bandProbeResult = label(dmsPanel, "准备自动读取高通基带能力…", 12, MUTED, false);
         bandProbeResult.setTextIsSelectable(true);
+        label(root, "基带当前频段偏好（NAS · 实验性）", 17, WHITE, true).setPadding(0, dp(18), 0, dp(8));
+        LinearLayout nasPanel = panel(root, dp(14), dp(12));
+        nasProbeResult = label(nasPanel, "准备自动读取 NAS 配置…", 12, MUTED, false);
+        nasProbeResult.setTextIsSelectable(true);
         Button restart = action(root, "⟳   重启电话服务（Root）", 0xFFFFB4AA, 0xFF39202A, "restart-phone", true);
         restart.setContentDescription("确认后使用 Root 重启电话进程，可能会暂时断网");
 
@@ -162,7 +168,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.6", 11, MUTED, false)
+        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.7", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -419,6 +425,61 @@ public class MainActivity extends Activity {
         }
     }
 
+
+    /** One-time experimental NAS read, independent from the phone Hook and 4s refresh. */
+    private void autoReadNasPreference() {
+        if (nasAutoStarted || nasProbeResult == null) return;
+        nasAutoStarted = true;
+        nasProbeResult.setText("正在自动读取 NAS 频段偏好（最长 10 秒）…");
+        new Thread(() -> {
+            String raw = runNasProbe();
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed() && nasProbeResult != null)
+                    nasProbeResult.setText("NAS 频段偏好（不等于运营商允许的频段）\n" + raw);
+            });
+        }, "Dual5G-AutoNAS").start();
+    }
+
+    private String runNasProbe() {
+        Process p = null;
+        try {
+            java.io.File src = new java.io.File(getFilesDir(), "nas_probe_arm64");
+            try (java.io.InputStream in = getAssets().open("nas_probe_arm64");
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(src)) {
+                byte[] b = new byte[8192]; int n;
+                while ((n = in.read(b)) != -1) out.write(b, 0, n);
+            }
+            String from = src.getAbsolutePath();
+            if (!from.matches("/data/(user|user_de)/0/dev\\.dual5g/files/nas_probe_arm64") &&
+                !from.matches("/data/data/dev\\.dual5g/files/nas_probe_arm64"))
+                return "NAS：应用数据路径不符合预期：" + from;
+            String path = "/data/local/tmp/dual5g_nas_probe_arm64";
+            String cmd = "[ \"$(id -u)\" = 0 ] || exit 91; " +
+                "cp '" + from + "' '" + path + "' || exit 92; " +
+                "chmod 0700 '" + path + "' || exit 93; " +
+                "'" + path + "'; rc=$?; rm -f '" + path + "'; exit $rc";
+            p = new ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start();
+            final Process current = p;
+            java.io.ByteArrayOutputStream data = new java.io.ByteArrayOutputStream();
+            Thread collector = new Thread(() -> {
+                try (java.io.InputStream in = current.getInputStream()) {
+                    byte[] b = new byte[2048]; int n;
+                    while ((n = in.read(b)) >= 0 && data.size() < 16384) data.write(b, 0, n);
+                } catch (Exception ignored) {}
+            }, "Dual5G-NAS-Output");
+            collector.setDaemon(true); collector.start();
+            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly(); return "NAS 读取超时（10 秒）";
+            }
+            collector.join(600);
+            return "退出码 " + p.exitValue() + "：\n" + data.toString("UTF-8").trim();
+        } catch (java.io.FileNotFoundException e) {
+            return "NAS 原生组件缺失：请使用项目内 GitHub Actions 构建";
+        } catch (Throwable e) {
+            return "NAS 读取失败：" + e;
+        } finally { if (p != null) p.destroy(); }
+    }
+
     private void confirmRestartPhone(Button button) {
         new AlertDialog.Builder(this)
             .setTitle("重启电话服务？")
@@ -493,6 +554,7 @@ public class MainActivity extends Activity {
         sendQuietStatus();
         liveHandler.postDelayed(livePoll, 4000L);
         autoReadDmsBands();
+        autoReadNasPreference();
     }
     @Override protected void onPause() {
         foreground = false;

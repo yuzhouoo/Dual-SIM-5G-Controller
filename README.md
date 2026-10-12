@@ -1,12 +1,17 @@
-# 网络切换控制台 v0.5.6 — 自动读取基带频段
+# v0.5.7 — NAS 当前频段偏好只读测试版
 
-基于 v0.5.5（用户已在 OnePlus 12 PJD110 真机得到 `QUERY_OK`，NR 13 个、LTE 17 个频段）。
+以 v0.5.6 为基础，不改 PhoneHook.java、双卡自动切换及 DMS 探测协议。
 
-- 进入 APP 后自动读取一次 Qualcomm DMS 频段能力，独立后台线程，10 秒超时；不再提供手动检测按钮。
-- 在 SIM 网络概览下方展示 NR 与 LTE 列表及「基带实测」来源标识；失败时显示 Root / QRTR 错误。
-- **不会**加入每 4 秒网络刷新链路，也不会改动电话服务 Hook、切卡策略、QCI 检测、LSPosed 推荐作用域。
-- 仍然通过 GitHub Actions NDK 构建 `assets/dms_probe_arm64` 并校验 APK 中存在该组件，非外部 qmicli。
-- 首次进入 APP 会请求 KernelSU Root 授权；在同一次 Activity 生命周期中不会重复请求。Root 不可用或拒绝时显示失败信息。再次重新打开 Activity 可重试。
-- DMS 是基带返回的能力数据，不等同当前启用频段或整机 RF 前端能力。软件不写入 Modem 配置。
+- 打开 APP 自动启动 **DMS 0x0045** 与 **NAS 0x0034** 两项一次性只读探测，无需点按钮。
+- NAS：Service 3，Node 0，Port 82（基于该机实测服务映射）。
+- NAS 解析 LTE 旧位图 0x15、扩展 LTE 0x23、NR SA 0x2C、NR NSA 0x2D、模式 0x11、停用模式 0x22。
+- 独立原生二进制；超时 10 秒；失败只显示错误，不影响电话 Hook。
+- NAS 的 *Band Preference* 不一定代表射频前端最终启用清单，更**不代表运营商实际许可的全部频段**。
+- 高通某些固件可能不返回相应 TLV、返回全 1 位掩码、或该接口只有单一 Modem 级视图；不能擅自按 SIM1/SIM2 区分。
+- 严禁通过 NAS `Set System Selection Preference 0x0033` 修改配置来测试。
 
-**构建**：完整上传包括 `.github/workflows` 的工程到 GitHub Actions 后运行 `Build Standalone LSPosed APK`。原生组件需要 Android NDK 编译。本环境未编译 APK 或真机验证 v0.5.6。
+## 构建
+完整上传含隐藏 `.github/workflows/build-apk.yml` 的目录，在 GitHub Actions 执行 `Build Standalone LSPosed APK`。必须在 APK 中验证同时包含 `assets/dms_probe_arm64` 和 `assets/nas_probe_arm64`。
+
+## 真实验证
+打开 APP，找到“基带当前频段偏好（NAS · 实验性）”，把完整文字发回。特别关注 `QMI result`、`Extended LTE`、`NR5G SA`、`NR5G NSA`。在真机数据验证之前，不宣称当前启用频段或运营商允许频段已成功读取。
