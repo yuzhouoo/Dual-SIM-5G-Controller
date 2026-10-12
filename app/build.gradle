@@ -6,8 +6,8 @@ android {
         applicationId 'dev.dual5g'
         minSdk 31
         targetSdk 35
-        versionCode 505
-        versionName '0.5.5-qrtr-bind-fix'
+        versionCode 506
+        versionName '0.5.6-auto-dms'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }

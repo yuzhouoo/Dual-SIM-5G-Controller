@@ -1,13 +1,12 @@
-# 网络切换控制台 v0.5.5 — QRTR bind 修复
+# 网络切换控制台 v0.5.6 — 自动读取基带频段
 
-## 错误与修复
-v0.5.4 真机运行报 `ERROR bind errno=22 Invalid argument`。旧版在 `bind()` 时硬编码本地 QRTR Node 0，Android 内核可能使用不同的本地 Node，导致 `EINVAL`。新版不调用显式 `bind()`，让内核在 `sendto()` 时自动分配本地 Node/临时端口，输出实际分配地址。目标 DMS 地址仍为 Node 0 / Port 119。
+基于 v0.5.5（用户已在 OnePlus 12 PJD110 真机得到 `QUERY_OK`，NR 13 个、LTE 17 个频段）。
 
-## 构建
-GitHub Actions 工作流 `.github/workflows/build-apk.yml` 自动安装 NDK 编译 ARM64 原生程序、放入 APK assets，并校验 `assets/dms_probe_arm64`。解压 ZIP 时注意上传隐藏 `.github` 目录。无需外装 qmicli。
+- 进入 APP 后自动读取一次 Qualcomm DMS 频段能力，独立后台线程，10 秒超时；不再提供手动检测按钮。
+- 在 SIM 网络概览下方展示 NR 与 LTE 列表及「基带实测」来源标识；失败时显示 Root / QRTR 错误。
+- **不会**加入每 4 秒网络刷新链路，也不会改动电话服务 Hook、切卡策略、QCI 检测、LSPosed 推荐作用域。
+- 仍然通过 GitHub Actions NDK 构建 `assets/dms_probe_arm64` 并校验 APK 中存在该组件，非外部 qmicli。
+- 首次进入 APP 会请求 KernelSU Root 授权；在同一次 Activity 生命周期中不会重复请求。Root 不可用或拒绝时显示失败信息。再次重新打开 Activity 可重试。
+- DMS 是基带返回的能力数据，不等同当前启用频段或整机 RF 前端能力。软件不写入 Modem 配置。
 
-## 测试
-安装、授予 Root，点击「检测基带硬件支持频段」。记录 `Local QRTR auto-bound` 后的输出。如果返回 sendto 错误/recvfrom 超时/QMI 错误，反馈完整输出以继续诊断。
-
-## 风险与边界
-本版只修改 `native/qmi_dms_probe.c` 和版本号，不修改 PhoneHook 或控制通信。不使用 DIAG、NV/EFS 写入、锁频、Modem 重启。查询成功不等于所有射频前端支持频段，亦不等于当前启用频段。未完成 Android NDK 编译与真机验证，请保留旧版 APK 以备回退。
+**构建**：完整上传包括 `.github/workflows` 的工程到 GitHub Actions 后运行 `Build Standalone LSPosed APK`。原生组件需要 Android NDK 编译。本环境未编译 APK 或真机验证 v0.5.6。

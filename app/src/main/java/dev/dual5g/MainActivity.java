@@ -52,6 +52,9 @@ public class MainActivity extends Activity {
         }
     };
     private boolean receiverRegistered = false;
+    private boolean dmsAutoStarted = false;
+    private volatile boolean dmsInFlight = false;
+    private long dmsLastAttemptAt = 0L;
     private long lastReplyAt = 0L;
     private long requestStartedAt = 0L;
 
@@ -140,9 +143,9 @@ public class MainActivity extends Activity {
         qciButton.setContentDescription("仅按需尝试获取当前数据连接的 QCI 或 5QI；不参与实时刷新");
         qciResult = label(root, "QCI 检测：尚未检测", 12, MUTED, false);
         qciResult.setPadding(dp(4), dp(6), dp(4), dp(8));
-        Button bandProbe = action(root, "▣   检测基带硬件支持频段（Root · 实验性）", BLUE, PANEL, "dms-probe", true);
-        bandProbeResult = label(root, "DMS 检测：尚未检测", 12, MUTED, false);
-        bandProbeResult.setPadding(dp(4), dp(7), dp(4), dp(8));
+        label(root, "基带硬件支持频段", 17, WHITE, true).setPadding(0, dp(22), 0, dp(8));
+        LinearLayout dmsPanel = panel(root, dp(14), dp(12));
+        bandProbeResult = label(dmsPanel, "准备自动读取高通基带能力…", 12, MUTED, false);
         bandProbeResult.setTextIsSelectable(true);
         Button restart = action(root, "⟳   重启电话服务（Root）", 0xFFFFB4AA, 0xFF39202A, "restart-phone", true);
         restart.setContentDescription("确认后使用 Root 重启电话进程，可能会暂时断网");
@@ -159,7 +162,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.3", 11, MUTED, false)
+        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.6", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -303,7 +306,6 @@ public class MainActivity extends Activity {
         parent.addView(b,p);
         b.setOnClickListener(v -> {
             if ("restart-phone".equals(command)) { confirmRestartPhone(b); return; }
-            if ("dms-probe".equals(command)) { lockButton(b); beginDmsProbe(); return; }
             lockButton(b);
             if ("qci".equals(command) && qciResult != null) {
                 qciResult.setText("QCI 检测：请求已发送，等待电话进程回应…");
@@ -329,15 +331,44 @@ public class MainActivity extends Activity {
     }
 
 
-    /** Runs the bundled ARM64 read-only native probe under KernelSU, outside com.android.phone. */
-    private void beginDmsProbe() {
-        bandProbeResult.setText("DMS 检测：正在请求 KernelSU Root，最多等待 10 秒…");
+    /** Auto-run once when UI first becomes visible. Never on the 4-second phone polling path. */
+    private void autoReadDmsBands() {
+        if (dmsInFlight || dmsAutoStarted || bandProbeResult == null) return;
+        dmsAutoStarted = true;
+        dmsInFlight = true;
+        dmsLastAttemptAt = android.os.SystemClock.elapsedRealtime();
+        bandProbeResult.setText("正在自动读取硬件频段（KernelSU Root，最长 10 秒）…");
         new Thread(() -> {
-            String result = runDmsProbe();
+            String raw = runDmsProbe();
+            String formatted = formatDmsBands(raw);
             runOnUiThread(() -> {
-                if (!isFinishing() && bandProbeResult != null) bandProbeResult.setText(result);
+                dmsInFlight = false;
+                if (!isFinishing() && !isDestroyed() && bandProbeResult != null)
+                    bandProbeResult.setText(formatted);
             });
-        }, "Dual5G-DMS-Probe").start();
+        }, "Dual5G-AutoDMS").start();
+    }
+
+    private static String formatDmsBands(String raw) {
+        if (raw == null || !raw.contains("QUERY_OK:"))
+            return "基带读取失败（非官方规格）\n" + (raw == null ? "无返回数据" : raw);
+        String lte = "";
+        String nr = "";
+        for (String line : raw.split("\n")) {
+            String clean = line.trim();
+            if (clean.startsWith("Extended LTE bands:")) lte = clean.substring("Extended LTE bands:".length()).trim();
+            else if (clean.startsWith("NR5G bands:")) nr = clean.substring("NR5G bands:".length()).trim();
+            else if (lte.isEmpty() && clean.startsWith("LTE B bands (legacy mask):"))
+                lte = clean.substring("LTE B bands (legacy mask):".length()).trim();
+        }
+        if (lte.isEmpty() && nr.isEmpty()) return "基带返回成功，但未解析出频段清单\n" + raw;
+        // Strip protocol count to avoid implying this is the RF front-end/active band mask.
+        lte = lte.replaceFirst("^count=\\d+;\\s*", "");
+        nr = nr.replaceFirst("^count=\\d+;\\s*", "");
+        return "● 基带实测 · Qualcomm DMS\n" +
+                "5G NR：" + (nr.isEmpty() ? "未上报" : nr) + "\n" +
+                "4G LTE：" + (lte.isEmpty() ? "未上报" : lte) + "\n" +
+                "说明：基带能力不等于当前启用频段或射频前端全部能力";
     }
 
     private String runDmsProbe() {
@@ -461,6 +492,7 @@ public class MainActivity extends Activity {
         liveHandler.removeCallbacks(livePoll);
         sendQuietStatus();
         liveHandler.postDelayed(livePoll, 4000L);
+        autoReadDmsBands();
     }
     @Override protected void onPause() {
         foreground = false;
