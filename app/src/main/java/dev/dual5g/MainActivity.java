@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
     private static final int BG=0xFF0B1120, PANEL=0xFF172238, STROKE=0xFF29384F;
     private static final int WHITE=0xFFF3F7FF, MUTED=0xFFA1B2CD, GREEN=0xFF5DE2B1, BLUE=0xFF6EA9FF;
-    private TextView status, updated, details, heading, qciResult;
+    private TextView status, updated, details, heading, qciResult, bandProbeResult;
     private LinearLayout overviewRow;
     private final SimCard[] sims = new SimCard[2];
     private LinearLayout debugBox;
@@ -140,6 +140,10 @@ public class MainActivity extends Activity {
         qciButton.setContentDescription("仅按需尝试获取当前数据连接的 QCI 或 5QI；不参与实时刷新");
         qciResult = label(root, "QCI 检测：尚未检测", 12, MUTED, false);
         qciResult.setPadding(dp(4), dp(6), dp(4), dp(8));
+        Button bandProbe = action(root, "▣   检测基带硬件支持频段（Root · 实验性）", BLUE, PANEL, "dms-probe", true);
+        bandProbeResult = label(root, "DMS 检测：尚未检测", 12, MUTED, false);
+        bandProbeResult.setPadding(dp(4), dp(7), dp(4), dp(8));
+        bandProbeResult.setTextIsSelectable(true);
         Button restart = action(root, "⟳   重启电话服务（Root）", 0xFFFFB4AA, 0xFF39202A, "restart-phone", true);
         restart.setContentDescription("确认后使用 Root 重启电话进程，可能会暂时断网");
 
@@ -155,7 +159,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.2", 11, MUTED, false)
+        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.3", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -299,6 +303,7 @@ public class MainActivity extends Activity {
         parent.addView(b,p);
         b.setOnClickListener(v -> {
             if ("restart-phone".equals(command)) { confirmRestartPhone(b); return; }
+            if ("dms-probe".equals(command)) { lockButton(b); beginDmsProbe(); return; }
             lockButton(b);
             if ("qci".equals(command) && qciResult != null) {
                 qciResult.setText("QCI 检测：请求已发送，等待电话进程回应…");
@@ -321,6 +326,66 @@ public class MainActivity extends Activity {
                 button.setEnabled(true);
             }
         }, 5000L);
+    }
+
+
+    /** Runs the bundled ARM64 read-only native probe under KernelSU, outside com.android.phone. */
+    private void beginDmsProbe() {
+        bandProbeResult.setText("DMS 检测：正在请求 KernelSU Root，最多等待 10 秒…");
+        new Thread(() -> {
+            String result = runDmsProbe();
+            runOnUiThread(() -> {
+                if (!isFinishing() && bandProbeResult != null) bandProbeResult.setText(result);
+            });
+        }, "Dual5G-DMS-Probe").start();
+    }
+
+    private String runDmsProbe() {
+        Process p = null;
+        try {
+            // APK asset is packaged by GitHub Actions from an NDK-built standalone binary.
+            java.io.File src = new java.io.File(getFilesDir(), "dms_probe_arm64");
+            try (java.io.InputStream in = getAssets().open("dms_probe_arm64");
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(src)) {
+                byte[] buffer = new byte[8192]; int n;
+                while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+            }
+            // Don't execute from app-private data (Android app-data execute restrictions).
+            // Root copies the trusted bundled executable to a fixed, app-specific temporary path.
+            String from = src.getAbsolutePath();
+            if (!from.matches("/data/(user|user_de)/0/dev\\.dual5g/files/dms_probe_arm64") &&
+                !from.matches("/data/data/dev\\.dual5g/files/dms_probe_arm64"))
+                return "DMS 检测：应用数据路径不符合预期，未执行：" + from;
+            String path = "/data/local/tmp/dual5g_dms_probe_arm64";
+            String cmd = "[ \"$(id -u)\" = 0 ] || exit 91; " +
+                    "cp '" + from + "' '" + path + "' || exit 92; " +
+                    "chmod 0700 '" + path + "' || exit 93; " +
+                    "'" + path + "'; rc=$?; rm -f '" + path + "'; exit $rc";
+            p = new ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start();
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            final Process process = p;
+            Thread collect = new Thread(() -> {
+                try (java.io.InputStream input = process.getInputStream()) {
+                    byte[] buf = new byte[2048]; int n;
+                    while ((n = input.read(buf)) >= 0 && bytes.size() < 16384) bytes.write(buf, 0, n);
+                } catch (Exception ignored) {}
+            }, "Dual5G-DMS-Output");
+            collect.setDaemon(true); collect.start();
+            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly();
+                return "DMS 检测：超时（10 秒）。请检查 KernelSU 授权窗口，或 QRTR 是否可访问。";
+            }
+            collect.join(600);
+            String stdout = bytes.toString("UTF-8").trim();
+            return "DMS 检测（退出码 " + p.exitValue() + "）：\n" +
+                    (stdout.isEmpty() ? "无输出；请检查 su、SELinux、执行权限" : stdout);
+        } catch (java.io.FileNotFoundException e) {
+            return "DMS 探测组件缺失；请用项目提供的 GitHub Actions 工作流构建 APK。";
+        } catch (Throwable e) {
+            return "DMS 检测失败：" + e.getClass().getSimpleName() + "：" + e.getMessage();
+        } finally {
+            if (p != null) p.destroy();
+        }
     }
 
     private void confirmRestartPhone(Button button) {
