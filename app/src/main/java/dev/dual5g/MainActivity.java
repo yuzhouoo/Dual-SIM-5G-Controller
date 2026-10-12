@@ -132,6 +132,8 @@ public class MainActivity extends Activity {
         LinearLayout secondary = horizontal(); root.addView(secondary);
         action(secondary, "停用策略", MUTED, PANEL, "disable", false);
         action(secondary, "恢复原始模式", 0xFFFFB4AA, PANEL, "restore", false);
+        Button qciButton = action(root, "⌁   读取 QCI / 5QI（实验性）", BLUE, PANEL, "qci", true);
+        qciButton.setContentDescription("仅按需尝试获取当前数据连接的 QCI 或 5QI；不参与实时刷新");
         Button restart = action(root, "⟳   重启电话服务（Root）", 0xFFFFB4AA, 0xFF39202A, "restart-phone", true);
         restart.setContentDescription("确认后使用 Root 重启电话进程，可能会暂时断网");
 
@@ -147,7 +149,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.0", 11, MUTED, false)
+        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.1", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -185,7 +187,7 @@ public class MainActivity extends Activity {
         real.setLayoutParams(np1); voice.setLayoutParams(np2);
         TextView band=label(card,"频段：—",11,BLUE,true);
         band.setPadding(0,dp(7),0,0);
-        TextView qos=label(card,"QCI：—   上行：—   下行：—",11,MUTED,false);
+        TextView qos=label(card,"QCI/5QI：—   上行：—   下行：—",11,MUTED,false);
         qos.setPadding(0,dp(5),0,0);
         return new SimCard(card,title,pill,carrier,mode,real,voice,band,qos);
     }
@@ -199,7 +201,7 @@ public class MainActivity extends Activity {
         c.real.setText("数据：—");
         c.voice.setText("语音：—");
         c.band.setText("频段：—");
-        c.qos.setText("QCI：—   上行：—   下行：—");
+        c.qos.setText("QCI/5QI：—   上行：—   下行：—");
         c.title.setText(c.slotTitle + " (—)");
         c.container.setAlpha(0.68f);
     }
@@ -229,7 +231,10 @@ public class MainActivity extends Activity {
             c.voice.setText("语音："+field(section,"当前语音网络："));
             String band = field(section,"当前连接频段：");
             c.band.setText(formatBandLine(band));
-            c.qos.setText((field(section,"当前数据网络：").toUpperCase(Locale.ROOT).contains("NR") ? "5QI" : "QCI") + "：—   上行：—   下行：—");
+            String reportedQci = field(section, "QCI/5QI：");
+            // Do not invent values for unsupported modem / ColorOS implementations.
+            c.qos.setText("QCI/5QI：" + (reportedQci.isEmpty() ? "—" : reportedQci)
+                    + "   上行：—   下行：—");
 
         }
 

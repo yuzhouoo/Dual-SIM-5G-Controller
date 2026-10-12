@@ -48,6 +48,14 @@ public class PhoneHook implements IXposedHookLoadPackage {
     private static volatile String lastStatus = "尚未同步";
     private static volatile String hardwareDiagnostic = "尚未检测（可点击检测设备无线能力）";
     private static final Runnable SYNC = () -> apply(false);
+    // QoS detection is EXPLICITLY on-demand and NEVER part of live status or policy.
+    private static final String[] QCI_VALUES = {"—", "—"};
+    private static volatile String qosDiagnostic = "尚未检测；点击读取 QCI/5QI";
+    private static volatile int qosToken = 0;
+    private static final java.util.concurrent.ThreadPoolExecutor QOS_WORKER = new java.util.concurrent.ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new ArrayBlockingQueue<>(1),
+            r -> { Thread t = new Thread(r, "Dual5G-qos-on-demand"); t.setDaemon(true); return t; },
+            new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
     // Only for a bounded, best-effort serving-cell fallback. Never run potentially
     // blocking OEM cell queries directly on the policy / IPC HandlerThread.
     private static final ThreadPoolExecutor CELL_WORKER = new ThreadPoolExecutor(
@@ -96,6 +104,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
                             prefs.edit().putBoolean("enabled", false).apply(); apply(true);
                         } else if ("sync".equals(command)) {
                             apply(false);
+                        } else if ("qci".equals(command)) {
+                            startQciProbe();
                         } else if ("hardware".equals(command)) {
                             hardwareDiagnostic = queryHardwareCapability();
                         } else if ("bands".equals(command)) {
@@ -111,7 +121,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.4.9 phone hook initialized; no su, no KSU module");
+        XposedBridge.log("Dual5G STANDALONE v0.5.1 phone hook initialized; no su, no KSU module");
         schedule(4000);
     }
 
@@ -188,7 +198,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
         StringBuilder b = new StringBuilder();
         b.append("【实时双卡网络状态】\n");
         b.append("最近操作：").append(lastStatus).append("\n");
-        b.append("设备能力检测：").append(hardwareDiagnostic).append("\n\n");
+        b.append("设备能力检测：").append(hardwareDiagnostic).append("\n");
+        b.append("QCI 检测状态：").append(qosDiagnostic).append("\n\n");
         try {
             int dataId = SubscriptionManager.getDefaultDataSubscriptionId();
             SubscriptionManager sm = app.getSystemService(SubscriptionManager.class);
@@ -207,6 +218,7 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 b.append("\n──── 卡 ").append(slot + 1).append(" (Slot ").append(slot).append(") ────\n");
                 b.append("运营商：").append(si.getCarrierName()).append("\n");
                 b.append("订阅 ID：").append(id).append("\n");
+                b.append("QCI/5QI：").append(slot < QCI_VALUES.length ? QCI_VALUES[slot] : "—").append("\n");
                 b.append("当前上网卡：").append(activeData ? "是 ★" : "否").append("\n");
                 try {
                     TelephonyManager tm = base.createForSubscriptionId(id);
@@ -393,6 +405,85 @@ public class PhoneHook implements IXposedHookLoadPackage {
         if (b.length() == 0) return "—（无有效 Band）";
         if (channel >= 0 && channel != Integer.MAX_VALUE) b.append(" · ").append(channelName).append(" ").append(channel);
         return b.toString();
+    }
+
+    /** Optional snapshot of existing default QoS for each phone slot.
+     * Never called by snapshot(), the policy worker or a telephony callback.
+     * Does not request a modem operation. No network/session writes.
+     */
+    private static void startQciProbe() {
+        final int token = ++qosToken;
+        QCI_VALUES[0] = "检测中"; QCI_VALUES[1] = "检测中";
+        qosDiagnostic = "正在尝试读取当前数据承载（最多 2 秒）";
+        handler.postDelayed(() -> {
+            if (token == qosToken && qosDiagnostic.startsWith("正在")) {
+                qosToken++;
+                QCI_VALUES[0] = "—（超时）";
+                QCI_VALUES[1] = "—（超时）";
+                qosDiagnostic = "超时：ColorOS 电话服务未及时返回 QoS 数据";
+                reply();
+            }
+        }, 2000L);
+        try {
+            QOS_WORKER.execute(() -> {
+                final String[] result = { readQciSlot(0), readQciSlot(1) };
+                Handler h = handler;
+                if (h != null) h.post(() -> {
+                    if (qosToken != token) return; // stale completion ignored
+                    QCI_VALUES[0] = result[0]; QCI_VALUES[1] = result[1];
+                    qosDiagnostic = "检测完成；仅代表已建立数据承载的 QoS，非套餐优先级";
+                    reply();
+                });
+            });
+        } catch (Throwable e) {
+            QCI_VALUES[0] = "—"; QCI_VALUES[1] = "—";
+            qosDiagnostic = "检测任务不可用：" + e.getClass().getSimpleName();
+        }
+    }
+
+    private static String readQciSlot(int slot) {
+        try {
+            Class<?> factory = Class.forName("com.android.internal.telephony.PhoneFactory");
+            Method getPhone = factory.getDeclaredMethod("getPhone", int.class);
+            getPhone.setAccessible(true);
+            Object phone = getPhone.invoke(null, slot);
+            Object controller = callIfPresent(phone, "getDataNetworkController");
+            Object networks = callIfPresent(controller, "getDataNetworkList");
+            if (!(networks instanceof Iterable)) return "—（接口未提供）";
+            for (Object network : (Iterable<?>) networks) {
+                Object response = callIfPresent(network, "getDataCallResponse");
+                Object qos = callIfPresent(response, "getDefaultQos");
+                if (qos == null) qos = callIfPresent(network, "getDefaultQos");
+                Object qci = callIfPresent(qos, "getQci");
+                Object fiveQi = callIfPresent(qos, "get5Qi");
+                if (fiveQi instanceof Number && ((Number)fiveQi).intValue() > 0)
+                    return "5QI " + fiveQi + standardPriority(((Number) fiveQi).intValue(), true);
+                if (qci instanceof Number && ((Number)qci).intValue() > 0)
+                    return "QCI " + qci + standardPriority(((Number) qci).intValue(), false);
+            }
+            return "—（未上报）";
+        } catch (Throwable ex) { return "—（" + ex.getClass().getSimpleName() + "）"; }
+    }
+
+    /** Standardized priority levels for the classic 1..9 QCI/5QI values. */
+    private static String standardPriority(int value, boolean nr) {
+        final int[] qci = {0, 2, 4, 3, 5, 1, 6, 7, 8, 9};
+        final int[] fiveQi = {0, 20, 40, 30, 50, 10, 60, 70, 80, 90};
+        if (value < 1 || value > 9) return "（优先级未映射）";
+        return "（标准优先级 " + (nr ? fiveQi[value] : qci[value]) + "）";
+    }
+
+    private static Object callIfPresent(Object owner, String name) {
+        if (owner == null) return null;
+        for (Class<?> c = owner.getClass(); c != null; c = c.getSuperclass()) {
+            try {
+                Method method = c.getDeclaredMethod(name);
+                method.setAccessible(true);
+                return method.invoke(owner);
+            } catch (NoSuchMethodException ignored) {
+            } catch (Throwable error) { return null; }
+        }
+        return null;
     }
 
     /** Read-only on-demand modem RAT report. This is not a complete band capability list. */
