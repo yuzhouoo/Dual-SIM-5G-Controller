@@ -53,6 +53,8 @@ public class MainActivity extends Activity {
     };
     private boolean receiverRegistered = false;
     private TextView nasProbeResult;
+    private TextView rfProbeResult;
+    private boolean rfAutoStarted = false;
     private boolean nasAutoStarted = false;
     private boolean dmsAutoStarted = false;
     private volatile boolean dmsInFlight = false;
@@ -153,6 +155,10 @@ public class MainActivity extends Activity {
         LinearLayout nasPanel = panel(root, dp(14), dp(12));
         nasProbeResult = label(nasPanel, "准备自动读取 NAS 配置…", 12, MUTED, false);
         nasProbeResult.setTextIsSelectable(true);
+        label(root, "当前实际射频频段（NAS RF · 实验性）", 17, WHITE, true).setPadding(0, dp(18), 0, dp(8));
+        LinearLayout rfPanel = panel(root, dp(14), dp(12));
+        rfProbeResult = label(rfPanel, "准备自动读取当前射频活动信息…", 12, MUTED, false);
+        rfProbeResult.setTextIsSelectable(true);
         Button restart = action(root, "⟳   重启电话服务（Root）", 0xFFFFB4AA, 0xFF39202A, "restart-phone", true);
         restart.setContentDescription("确认后使用 Root 重启电话进程，可能会暂时断网");
 
@@ -480,6 +486,60 @@ public class MainActivity extends Activity {
         } finally { if (p != null) p.destroy(); }
     }
 
+    /** One-time read-only NAS RF activity query, independent from phone Hook. */
+    private void autoReadRfBands() {
+        if (rfAutoStarted || rfProbeResult == null) return;
+        rfAutoStarted = true;
+        rfProbeResult.setText("正在读取 NAS RF 当前活动频段（最长 10 秒）…");
+        new Thread(() -> {
+            String raw = runRfProbe();
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed() && rfProbeResult != null)
+                    rfProbeResult.setText("当前射频活动信息（不代表完整启用频段或运营商允许频段）\n" + raw);
+            });
+        }, "Dual5G-AutoRF").start();
+    }
+
+    private String runRfProbe() {
+        Process p = null;
+        try {
+            java.io.File src = new java.io.File(getFilesDir(), "nas_rf_probe_arm64");
+            try (java.io.InputStream in = getAssets().open("nas_rf_probe_arm64");
+                 java.io.FileOutputStream out = new java.io.FileOutputStream(src)) {
+                byte[] b = new byte[8192]; int n;
+                while ((n = in.read(b)) != -1) out.write(b, 0, n);
+            }
+            String from = src.getAbsolutePath();
+            if (!from.matches("/data/(user|user_de)/0/dev\\.dual5g/files/nas_rf_probe_arm64") &&
+                !from.matches("/data/data/dev\\.dual5g/files/nas_rf_probe_arm64"))
+                return "RF：应用数据路径不符合预期：" + from;
+            String path = "/data/local/tmp/dual5g_nas_rf_probe_arm64";
+            String cmd = "[ \"$(id -u)\" = 0 ] || exit 91; " +
+                "cp '" + from + "' '" + path + "' || exit 92; " +
+                "chmod 0700 '" + path + "' || exit 93; " +
+                "'" + path + "'; rc=$?; rm -f '" + path + "'; exit $rc";
+            p = new ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start();
+            final Process current = p;
+            java.io.ByteArrayOutputStream data = new java.io.ByteArrayOutputStream();
+            Thread collector = new Thread(() -> {
+                try (java.io.InputStream in = current.getInputStream()) {
+                    byte[] b = new byte[2048]; int n;
+                    while ((n = in.read(b)) >= 0 && data.size() < 16384) data.write(b, 0, n);
+                } catch (Exception ignored) {}
+            }, "Dual5G-RF-Output");
+            collector.setDaemon(true); collector.start();
+            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                p.destroyForcibly(); return "RF 读取超时（10 秒）";
+            }
+            collector.join(600);
+            return "退出码 " + p.exitValue() + "：\n" + data.toString("UTF-8").trim();
+        } catch (java.io.FileNotFoundException e) {
+            return "RF 原生组件缺失：请使用项目内 GitHub Actions 构建";
+        } catch (Throwable e) {
+            return "RF 读取失败：" + e;
+        } finally { if (p != null) p.destroy(); }
+    }
+
     private void confirmRestartPhone(Button button) {
         new AlertDialog.Builder(this)
             .setTitle("重启电话服务？")
@@ -555,6 +615,7 @@ public class MainActivity extends Activity {
         liveHandler.postDelayed(livePoll, 4000L);
         autoReadDmsBands();
         autoReadNasPreference();
+        autoReadRfBands();
     }
     @Override protected void onPause() {
         foreground = false;
