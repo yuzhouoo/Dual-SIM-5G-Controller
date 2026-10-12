@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
     private LinearLayout overviewRow;
     private final SimCard[] sims = new SimCard[2];
     private LinearLayout debugBox;
-    private TextView bandReport, hardwareReport;
+    
     private boolean expanded = false;
     private final Handler liveHandler = new Handler(Looper.getMainLooper());
     private boolean foreground = false;
@@ -54,11 +54,10 @@ public class MainActivity extends Activity {
     private boolean receiverRegistered = false;
     private long lastReplyAt = 0L;
     private long requestStartedAt = 0L;
-    private String ipcMessage = "尚未收到电话进程回应";
+
     private final BroadcastReceiver updates = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             lastReplyAt = android.os.SystemClock.elapsedRealtime();
-            ipcMessage = "通信正常，已收到电话进程回应";
             String raw = intent.getStringExtra("status");
             boolean enabled = intent.getBooleanExtra("enabled", true);
             status.setText(enabled ? "●  自动策略已启用" : "●  自动策略已停用");
@@ -67,8 +66,6 @@ public class MainActivity extends Activity {
             if (raw == null) raw = "电话进程未提供状态数据";
             details.setText(raw);
             showStatus(raw);
-            updateBands(raw);
-            updateHardware(raw);
         }
     };
 
@@ -99,8 +96,14 @@ public class MainActivity extends Activity {
         scroll.addView(root);
         setContentView(scroll);
 
-        label(root, "DUAL SIM / 5G", 12, BLUE, true);
-        heading = label(root, "双卡网络控制台", 28, WHITE, true);
+        LinearLayout brandRow = horizontal();
+        root.addView(brandRow);
+        android.widget.ImageView appIcon = new android.widget.ImageView(this);
+        appIcon.setImageResource(dev.dual5g.R.mipmap.ic_launcher);
+        LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(48), dp(48));
+        iconParams.rightMargin = dp(12);
+        brandRow.addView(appIcon, iconParams);
+        heading = label(brandRow, "网络切换控制台", 24, WHITE, true);
         heading.setPadding(0, dp(8), 0, dp(6));
         // Compact first screen: service state only, SIM information lives in overview.
 
@@ -119,9 +122,6 @@ public class MainActivity extends Activity {
         root.addView(overviewRow, new LinearLayout.LayoutParams(-1,-2));
         for (int i=0;i<2;i++) sims[i]=addSim(overviewRow, i);
 
-        // Separate the three meanings of band information.
-        addHardwareBands(root);
-        addLiveBandDiagnostics(root);
 
         label(root, "快捷操作", 17, WHITE, true).setPadding(0, dp(21), 0, dp(10));
         Button refresh = action(root, "↻   刷新网络状态", BLUE, 0xFF152845, "status", true);
@@ -147,7 +147,7 @@ public class MainActivity extends Activity {
             expander.setText(expanded ? "调试日志  ▴" : "调试日志  ▾");
             debugBox.setVisibility(expanded ? View.VISIBLE : View.GONE);
         });
-        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.4.6", 11, MUTED, false)
+        label(root, "LSPosed · 推荐作用域 com.android.phone     |     v0.5.0", 11, MUTED, false)
                 .setPadding(0, dp(18), 0, 0);
         try {
             registerReceiver(updates, new IntentFilter(PhoneHook.RESULT), Context.RECEIVER_EXPORTED);
@@ -156,82 +156,6 @@ public class MainActivity extends Activity {
             android.util.Log.e("Dual5G-UI", "registerReceiver failed", ex);
             details.setText("接收状态广播失败：" + ex);
         }
-    }
-
-    private void addLiveBandDiagnostics(LinearLayout root) {
-        label(root, "频段实时诊断", 17, WHITE, true).setPadding(0, dp(22), 0, dp(10));
-        LinearLayout block = panel(root, dp(16), 0);
-        label(block, "① 实际支持", 13, BLUE, true);
-        label(block, "硬件支持列表由上方官方规格提供。Android 未提供可靠的逐频段硬件能力枚举接口。", 12, MUTED, false);
-        label(block, "② 当前启用", 13, BLUE, true).setPadding(0, dp(12), 0, 0);
-        label(block, "可读取每张卡允许的 NR/LTE 等制式，但基带启用的全部 N/B Band 无通用接口，显示为「不可获取」。", 12, MUTED, false);
-        label(block, "③ 当前连接 · 自动刷新", 13, BLUE, true).setPadding(0, dp(12), 0, 0);
-        bandReport = label(block, "当前连接频段见上方双卡卡片，页面打开时每 4 秒刷新。", 12, WHITE, false);
-        label(block, "仅展示当前注册频段，不记录历史；5G NSA 可能只显示 LTE 锚点。", 11, MUTED, false);
-    }
-
-    private void updateBands(String raw) {
-        if (bandReport == null || raw == null) return;
-        String prefix = "基站频段查询：";
-        int p = raw.indexOf(prefix);
-        if (p < 0) return;
-        int end = raw.indexOf("\n【实时", p);
-        if (end < 0) end = raw.indexOf("\n最近操作：", p);
-        if (end < 0) end = raw.length();
-        bandReport.setText(raw.substring(p + prefix.length(), end).trim());
-    }
-
-    private void updateHardware(String raw) {
-        if (hardwareReport == null || raw == null) return;
-        String prefix = "设备能力检测：";
-        int p = raw.indexOf(prefix);
-        if (p < 0) return;
-        int end = raw.indexOf("\n基站频段查询：", p);
-        if (end < 0) end = raw.length();
-        hardwareReport.setText(raw.substring(p + prefix.length(), end).trim());
-    }
-
-    private void addHardwareBands(LinearLayout root) {
-        label(root, "设备硬件支持频段", 17, WHITE, true)
-                .setPadding(0, dp(24), 0, dp(10));
-        LinearLayout block = panel(root, dp(16), 0);
-        String model = Build.MODEL == null ? "未知" : Build.MODEL.trim();
-        String device = Build.DEVICE == null ? "未知" : Build.DEVICE.trim();
-        boolean chinaModel = model.equalsIgnoreCase("PJD110")
-                || device.equalsIgnoreCase("PJD110");
-        label(block, "OnePlus 12  ·  型号 " + model, 14, WHITE, true);
-        label(block, "设备代号 " + device, 11, MUTED, false).setPadding(0, dp(3), 0, dp(8));
-        label(block, "设备读取 · Modem 无线制式能力（非逐频段）", 12, BLUE, true);
-        hardwareReport = label(block, "尚未检测。点击下方按钮读取设备支持的 NR/LTE 等制式。", 12, WHITE, false);
-        hardwareReport.setTextIsSelectable(true);
-        action(block, "⌁   检测设备无线能力", WHITE, 0xFF152845, "hardware", true);
-        label(block, "系统只提供制式能力掩码，无法直接证明 N41/N78 等单个频段是否由当前基带支持。", 11, MUTED, false);
-        if (!chinaModel) {
-            label(block, "【官方规格】型号未匹配国行 PJD110，未采用国行频段表兜底，以免误报。", 12, MUTED, false);
-            return;
-        }
-        label(block, "【官方公布】中国版 PJD110 · 完整频段表", 11, GREEN, true);
-        TextView toggle = label(block, "查看全部频段  ▾", 13, BLUE, true);
-        toggle.setPadding(0, dp(14), 0, dp(8));
-        LinearLayout bands = vertical();
-        block.addView(bands);
-        bands.setVisibility(View.GONE);
-        addBandLine(bands, "5G NR（13 个）", "N1 · N3 · N5 · N7 · N8 · N20 · N28A · N38 · N40 · N41 · N66 · N77 · N78");
-        addBandLine(bands, "4G LTE FDD（12 个）", "B1 · B3 · B4 · B5 · B7 · B8 · B18 · B19 · B20 · B26 · B28A · B66");
-        addBandLine(bands, "4G LTE TDD（5 个）", "B34 · B38 · B39 · B40 · B41");
-        addBandLine(bands, "3G WCDMA", "B1 · B4 · B5 · B8");
-        label(bands, "【官方公布】来源：一加 12 中国官网参数表。此列表不是设备读取结果，也不代表当前已启用或正在连接。", 11, MUTED, false)
-                .setPadding(0, dp(10), 0, 0);
-        toggle.setOnClickListener(v -> {
-            boolean open = bands.getVisibility() != View.VISIBLE;
-            bands.setVisibility(open ? View.VISIBLE : View.GONE);
-            toggle.setText(open ? "收起全部频段  ▴" : "查看全部频段  ▾");
-        });
-    }
-
-    private void addBandLine(LinearLayout parent, String title, String values) {
-        label(parent, title, 12, BLUE, true).setPadding(0, dp(10), 0, dp(3));
-        label(parent, values, 12, WHITE, false);
     }
 
     private SimCard addSim(LinearLayout row, int slot) {
@@ -364,9 +288,6 @@ public class MainActivity extends Activity {
         parent.addView(b,p);
         b.setOnClickListener(v -> {
             if ("restart-phone".equals(command)) { confirmRestartPhone(b); return; }
-            if ("hardware".equals(command) && hardwareReport != null) {
-                hardwareReport.setText("检测请求已发送，等待电话服务回应…");
-            }
             lockButton(b);
             send(command);
         });
@@ -441,13 +362,7 @@ public class MainActivity extends Activity {
             Intent i=new Intent(PhoneHook.CONTROL).setPackage("com.android.phone");
             i.putExtra("command",command);
             sendBroadcast(i);
-            if ("hardware".equals(command)) {
-                liveHandler.postDelayed(() -> {
-                    if (hardwareReport != null && lastReplyAt < requestStartedAt) {
-                        hardwareReport.setText("通信超时：电话进程没有回复。请检查 LSPosed 作用域 com.android.phone、重启手机，并查看调试日志。\n本次未进行设备能力检测。");
-                    }
-                }, 6000L);
-            }
+
         } catch (Throwable e) {
             if (details != null) details.setText("广播发送失败：" + e);
         }

@@ -1,11 +1,16 @@
-# Dual SIM 5G Controller v0.4.9 — Band Fallback
+# 网络切换控制台 v0.5.0
 
-基于 v0.4.8，**完全保留其控制广播、签名权限、自动 NR 切换、主界面与 LSPosed 推荐作用域**，仅修补当前频段读取。
+基于 v0.4.9 的完整 Android 工程。
 
-1. 优先使用原有 ServiceState 已注册 PS/WWAN 小区获取 N/B 频段和 NR-ARFCN/EARFCN。
-2. ServiceState 没有返回频段时，尝试 `TelephonyManager.getAllCellInfo()` 中 `isRegistered()` 的 NR/LTE 小区，绝不读取邻区当作连接频段。
-3. 兜底读取在独立单线程上执行，最多等待 650ms；队列限制 1 项，避免故障拖慢电话进程主控制线程。
-4. 两条路径都失败时，在“当前连接频段”中返回失败原因，方便从调试面板判断是 API 数据缺失、权限还是超时。可能出现 Android 缓存中的最后注册小区，无法保证毫秒级切换同步。
-5. QCI/5QI 与上下行签约速率仍是占位符，没有加入不稳定的 OEM QoS 反射扫描。
+## 本次 UI 更改
+- 应用名称改为「网络切换控制台」。
+- 使用 5G SIM 专属图标（mipmap 多密度 PNG）。
+- 去掉「频段实时诊断」和「设备硬件支持频段」两个独立 UI 模块与无线能力检测按钮。
+- 保留 SIM 网络概览中的实时 Band 和 NR-ARFCN / EARFCN。
+- 保留双卡并排、subId、状态时间、QCI/5QI 及上下行占位、Root 重启电话服务、按钮冷却、调试日志。
+- LSPosed 推荐作用域仍为 com.android.phone。
 
-**风险与验证**：未在设备 Android SDK 编译或真机运行。必须用 GitHub Actions 编译；切换前备份好可用源码。安装后需重新加载 `com.android.phone` 使新 Hook 生效。若频段仍然显示“—”，请贴出 APP 调试区中的“当前连接频段”完整一行；切勿误以为基站频段可以用官方硬件规格代替。
+## 风险说明
+`PhoneHook.java` 原封未动，沿用 v0.4.9 行为，不意味着其读取问题已得到修复。
+QCI/5QI、签约上下行暂无可靠读取，显示 —。
+工程未通过 Android SDK 编译或真机测试；请自行使用 GitHub Actions 构建，并重新加载作用域进程。
