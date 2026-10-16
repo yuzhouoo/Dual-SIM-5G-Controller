@@ -18,59 +18,17 @@ jobs:
       - uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
-      - name: Install Android SDK, Build Tools and NDK
+      - name: Install Android SDK, Build Tools
         run: |
-          sdkmanager --install 'platforms;android-36' 'build-tools;35.0.0' 'ndk;27.2.12479018'
+          sdkmanager --install 'platforms;android-36' 'build-tools;35.0.0' 
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Build ARM64 DMS probe with Android NDK
-        shell: bash
-        run: |
-          set -euo pipefail
-          NDK="$ANDROID_HOME/ndk/27.2.12479018"
-          CLANG="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
-          test -x "$CLANG"
-          mkdir -p app/src/main/assets
-          "$CLANG" -O2 -Wall -Wextra -fPIE -pie -o app/src/main/assets/dms_probe_arm64 native/qmi_dms_probe.c
-          test -s app/src/main/assets/dms_probe_arm64
-          file app/src/main/assets/dms_probe_arm64
-          file app/src/main/assets/dms_probe_arm64 | grep -q 'ELF 64-bit LSB pie executable, ARM aarch64'
-      - name: Build ARM64 NAS read-only preference probe
-        shell: bash
-        run: |
-          set -euo pipefail
-          CLANG="$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
-          "$CLANG" -O2 -Wall -Wextra -fPIE -pie -o app/src/main/assets/nas_probe_arm64 native/qmi_nas_probe.c
-          file app/src/main/assets/nas_probe_arm64 | grep -q "ELF 64-bit LSB pie executable, ARM aarch64"
-      - name: Build ARM64 NAS active RF band probe
-        shell: bash
-        run: |
-          set -euo pipefail
-          CLANG="$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android31-clang"
-          "$CLANG" -O2 -Wall -Wextra -fPIE -pie -o app/src/main/assets/nas_rf_probe_arm64 native/qmi_nas_rf_probe.c
-          file app/src/main/assets/nas_rf_probe_arm64 | grep -q "ELF 64-bit LSB pie executable, ARM aarch64"
       - name: Compile APK
         shell: bash
         run: |
           set -o pipefail
           gradle :app:assembleDebug --no-daemon --console=plain 2>&1 | tee build.log
-      - name: Verify DMS executable is packaged inside APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          test -s "$APK"
-          unzip -Z -1 "$APK" | grep -qx 'assets/dms_probe_arm64'
-          unzip -p "$APK" assets/dms_probe_arm64 > /tmp/dms_probe_from_apk
-          head -c 4 /tmp/dms_probe_from_apk | od -An -tx1 | grep -qi '7f 45 4c 46'
-          unzip -Z -1 "$APK" | grep -qx 'assets/nas_probe_arm64'
-          unzip -p "$APK" assets/nas_probe_arm64 > /tmp/nas_probe_from_apk
-          head -c 4 /tmp/nas_probe_from_apk | od -An -tx1 | grep -qi '7f 45 4c 46'
-          unzip -Z -1 "$APK" | grep -qx 'assets/nas_rf_probe_arm64'
-          unzip -p "$APK" assets/nas_rf_probe_arm64 > /tmp/nas_rf_probe_from_apk
-          head -c 4 /tmp/nas_rf_probe_from_apk | od -An -tx1 | grep -qi '7f 45 4c 46'
-          echo 'PASS: DMS + NAS + RF ARM64 probes bundled in APK assets.'
       - name: Upload compiler logs (also on failure)
         if: always()
         uses: actions/upload-artifact@v4

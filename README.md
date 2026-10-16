@@ -1,23 +1,9 @@
-# 网络切换控制台 v0.5.8 · NAS RF 只读测试版
+# 网络切换控制台 v0.6.0 · 精简版（基于 v0.5.9）
 
-基于 v0.5.7，保留已有 LSPosed/双卡策略、DMS 自动硬件频段、NAS 自动频段偏好读取，增加启动后自动执行一次 **NAS Get RF Band Information (QMI 0x0031)**。
+保留：双卡 SIM 卡信息（SIM 1/2、订阅 ID、运营商）、当前默认上网卡、5G/4G 优先状态、自动切换策略、立即同步、刷新、停用策略、恢复原始模式、Root 重启电话服务、LSPosed 作用域 `com.android.phone`。
 
-- **独立单 APK**，使用内置 ARM64 探测组件和现有 KernelSU Root，无 Termux/qmicli/额外模块。
-- DMS: Service 2, Node 0, Port 119, Message 0x0045（原样保留）。
-- NAS selection preference: Service 3, Node 0, Port 82, Message 0x0034（原样保留）。
-- NAS RF band info: Service 3, Node 0, Port 82, Message 0x0031（新加，只读）。
-- 扩展列表 0x11 中的 Channel 是 32 位，传统列表 0x01 是 16 位；活动 Band Class 以**原始枚举值**显示，避免错误地把枚举数当成 B/N 频段号。后续依据真机输出进行精确映射。
-- 单次自动查询，不放入 4 秒刷新或 `com.android.phone` Hook；10 秒应用层超时，失败不影响双卡切换。
-- **当前活动 RF ≠ 所有启用频段 ≠ 运营商许可频段**，无法据此列出运营商全量清单。
+删除：QCI/5QI 及上下行 QoS 速率、数据和语音网络状态、连接频段和 ARFCN、DMS 硬件频段、NAS 频段偏好、NAS RF 当前射频状态、Root QoS 诊断模块。不会再执行这些自动探测任务，也不再编译相关 NDK 探针。
 
-## GitHub Actions 构建
-上传全部文件（包含隐藏的 `.github/workflows/build-apk.yml`），运行 `Build Standalone LSPosed APK`。Actions 使用 NDK 27.2 编译 `native/qmi_nas_rf_probe.c` 并核验 APK 内 `assets/nas_rf_probe_arm64`。
+使用 `.github/workflows/build-apk.yml` 在原有仓库编译 APK，不需要新建仓库。
 
-## 测试
-安装 APK，Root 授权后打开，复制 **当前实际射频频段（NAS RF · 实验性）** 区域的完整日志。最好分别在 SIM1、SIM2 是默认数据卡时各采集一次。**切换默认数据卡是可选的手动操作，不是探测程序会执行的行为。**
-
-构建状态：源码完成、C 语法检查；未执行 Android NDK/Gradle 全量构建和真机测试。
-
-
-## v0.5.9 QoS 只读诊断
-自动在独立后台线程运行 Root `dumpsys telephony` / `dumpsys connectivity`，提取候选 QCI、5QI 和速率参数；不会显示包含用户/基站标识的原始 dumpsys，也不会向基带写入数据。注意本版为发现阶段：不代表已经识别套餐签约上下行，或完成 SIM / APN 归属；没有数据时会明确显示未发现。旧按钮和电话服务 Hook 保持不变。
+**验证范围：** 已检查源码引用与 ZIP 完整性。未在 Android SDK 环境中执行完整 Gradle 构建，也未真机验证。
