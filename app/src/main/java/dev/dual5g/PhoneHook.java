@@ -30,7 +30,20 @@ public class PhoneHook implements IXposedHookLoadPackage {
     private static volatile Handler handler;
     private static volatile Application app;
     private static volatile String lastStatus = "尚未同步";
+    // Reconcile on phone-process startup, after SIM switches, and periodically.
+    // Android/ROM may restore a saved USER preference after our first write.
+    private static final long WATCHDOG_MS = 20_000L;
+    private static final long RETRY_MS = 2_500L;
     private static final Runnable SYNC = () -> apply(false);
+    private static final Runnable WATCHDOG = new Runnable() {
+        @Override public void run() {
+            try { apply(false); }
+            finally {
+                Handler h = handler;
+                if (h != null) h.postDelayed(this, WATCHDOG_MS);
+            }
+        }
+    };
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lp) {
         if (!"com.android.phone".equals(lp.packageName)) return;
         XposedHelpers.findAndHookMethod(Application.class, "attach", Context.class, new XC_MethodHook() {
@@ -51,6 +64,8 @@ public class PhoneHook implements IXposedHookLoadPackage {
         filter.addAction("android.telephony.action.SIM_CARD_STATE_CHANGED");
         filter.addAction("android.telephony.action.SIM_APPLICATION_STATE_CHANGED");
         filter.addAction("android.telephony.action.DEFAULT_SUBSCRIPTION_CHANGED");
+        filter.addAction("android.intent.action.SIM_STATE_CHANGED");
+        filter.addAction("android.intent.action.BOOT_COMPLETED");
         application.registerReceiver(new BroadcastReceiver() {
             @Override public void onReceive(Context context, Intent intent) { schedule(1500); }
         }, filter, Context.RECEIVER_EXPORTED);
@@ -83,8 +98,10 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G STANDALONE v0.5.2 phone hook initialized; no su, no KSU module");
-        schedule(4000);
+        XposedBridge.log("Dual5G v0.6.1 phone hook initialized; watchdog enabled");
+        // No reliance on the UI opening or on a one-off boot-time broadcast.
+        schedule(2500);
+        handler.postDelayed(WATCHDOG, 7000);
     }
 
     private static SharedPreferences prefs() {
@@ -105,12 +122,25 @@ public class PhoneHook implements IXposedHookLoadPackage {
             }
             SubscriptionManager sm = app.getSystemService(SubscriptionManager.class);
             TelephonyManager base = app.getSystemService(TelephonyManager.class);
-            if (sm == null || base == null) { lastStatus = "系统电话服务未就绪"; return; }
+            if (sm == null || base == null) { lastStatus = "系统电话服务未就绪，稍后重试"; schedule(RETRY_MS); return; }
             List<SubscriptionInfo> subs = sm.getActiveSubscriptionInfoList();
-            if (subs == null || subs.size() == 0) { lastStatus = "没有活动 SIM 卡"; return; }
+            if (subs == null || subs.size() == 0) { lastStatus = "没有活动 SIM 卡，稍后重试"; schedule(RETRY_MS); return; }
             int defaultId = SubscriptionManager.getDefaultDataSubscriptionId();
             if (!restore && !SubscriptionManager.isValidSubscriptionId(defaultId)) {
-                lastStatus = "默认数据卡尚未就绪"; return;
+                lastStatus = "默认数据卡尚未就绪，稍后重试"; schedule(RETRY_MS); return;
+            }
+            if (!restore) {
+                boolean foundDefault = false;
+                for (SubscriptionInfo si : subs) {
+                    if (si.getSubscriptionId() == defaultId && si.getSimSlotIndex() >= 0) {
+                        foundDefault = true; break;
+                    }
+                }
+                if (!foundDefault) {
+                    lastStatus = "默认上网卡还未出现在活动卡列表，稍后重试";
+                    schedule(RETRY_MS);
+                    return;
+                }
             }
             StringBuilder report = new StringBuilder();
             report.append("defaultDataSubId=").append(defaultId).append('\n');
@@ -120,6 +150,13 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 int id = si.getSubscriptionId();
                 int slot = si.getSimSlotIndex();
                 if (slot < 0) continue;
+                // Default data SIM might change mid-reconciliation; never apply
+                // an old default-to-secondary mapping to the new default SIM.
+                if (!restore && SubscriptionManager.getDefaultDataSubscriptionId() != defaultId) {
+                    lastStatus = "默认上网卡切换中，重新校验";
+                    schedule(1200);
+                    return;
+                }
                 TelephonyManager tm = base.createForSubscriptionId(id);
                 long current = tm.getAllowedNetworkTypesForReason(USER);
                 String key = "backup_" + id;
@@ -134,7 +171,10 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 if (current != target) {
                     tm.setAllowedNetworkTypesForReason(USER, target);
                     long verified = tm.getAllowedNetworkTypesForReason(USER);
-                    if (verified != target) throw new IllegalStateException("slot " + slot + " 写入未生效");
+                    if (verified != target) {
+                        schedule(RETRY_MS);
+                        throw new IllegalStateException("slot " + slot + " 写入未生效，稍后重试");
+                    }
                     changed++;
                 }
                 report.append("slot").append(slot).append(" subId=").append(id)
@@ -142,15 +182,22 @@ public class PhoneHook implements IXposedHookLoadPackage {
                       .append(current != target ? " 已更新" : " 无需修改").append('\n');
             }
             editor.apply();
+            if (!restore && SubscriptionManager.getDefaultDataSubscriptionId() != defaultId) {
+                schedule(1200);
+                report.append("默认上网卡已变化，正在重新校验\n");
+            }
             if (restore) report.append("已尝试恢复首次接管时备份的模式；自动切换已停用\n");
             report.append("修改次数=").append(changed);
             lastStatus = report.toString();
-            XposedBridge.log("Dual5G STANDALONE v0.2.4 policy: " + lastStatus);
+            // Avoid spamming LSPosed logs every watchdog tick.
+            if (changed > 0 || restore) XposedBridge.log("Dual5G v0.6.1 reconcile: " + lastStatus);
         } catch (SecurityException e) {
             lastStatus = "权限不足：电话进程 API 被 ROM 拒绝: " + e;
+            schedule(5000);
             XposedBridge.log("Dual5G permission failure " + e);
         } catch (Throwable e) {
             lastStatus = "同步失败: " + e;
+            schedule(5000);
             XposedBridge.log("Dual5G apply failure " + e);
         }
     }
