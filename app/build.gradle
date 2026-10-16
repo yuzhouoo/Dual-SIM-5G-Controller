@@ -6,8 +6,8 @@ android {
         applicationId 'dev.dual5g'
         minSdk 31
         targetSdk 35
-        versionCode 610
-        versionName '0.6.1-policy-guard'
+        versionCode 620
+        versionName '0.6.2-policy-stability'
     }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
 }

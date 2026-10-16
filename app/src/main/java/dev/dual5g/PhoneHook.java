@@ -30,10 +30,11 @@ public class PhoneHook implements IXposedHookLoadPackage {
     private static volatile Handler handler;
     private static volatile Application app;
     private static volatile String lastStatus = "尚未同步";
-    // Reconcile on phone-process startup, after SIM switches, and periodically.
-    // Android/ROM may restore a saved USER preference after our first write.
-    private static final long WATCHDOG_MS = 20_000L;
-    private static final long RETRY_MS = 2_500L;
+    // Single HandlerThread serializes all policy operations. Broadcasts are debounced;
+    // an independent low-frequency watchdog catches ROM changes without polling fast.
+    private static final long WATCHDOG_MS = 60_000L;
+    private static final long[] BACKOFF_MS = {2000L, 5000L, 10000L, 30000L, 60000L};
+    private static int failures = 0;
     private static final Runnable SYNC = () -> apply(false);
     private static final Runnable WATCHDOG = new Runnable() {
         @Override public void run() {
@@ -79,12 +80,14 @@ public class PhoneHook implements IXposedHookLoadPackage {
                     try {
                         SharedPreferences prefs = prefs();
                         if ("enable".equals(command)) {
-                            prefs.edit().putBoolean("enabled", true).apply(); apply(false);
+                            prefs.edit().putBoolean("enabled", true).commit(); failures = 0; apply(false);
                         } else if ("disable".equals(command)) {
-                            prefs.edit().putBoolean("enabled", false).apply();
+                            prefs.edit().putBoolean("enabled", false).commit();
+                            handler.removeCallbacks(SYNC); failures = 0;
                             lastStatus = "自动切换已关闭；当前网络模式保留";
                         } else if ("restore".equals(command)) {
-                            prefs.edit().putBoolean("enabled", false).apply(); apply(true);
+                            prefs.edit().putBoolean("enabled", false).commit();
+                            handler.removeCallbacks(SYNC); failures = 0; apply(true);
                         } else if ("sync".equals(command)) {
                             apply(false);
                         } else if (!"status".equals(command)) {
@@ -98,10 +101,10 @@ public class PhoneHook implements IXposedHookLoadPackage {
                 });
             }
         }, new IntentFilter(CONTROL), PERMISSION, handler, Context.RECEIVER_EXPORTED);
-        XposedBridge.log("Dual5G v0.6.1 phone hook initialized; watchdog enabled");
+        XposedBridge.log("Dual5G v0.6.2 phone hook initialized; policy guard enabled");
         // No reliance on the UI opening or on a one-off boot-time broadcast.
         schedule(2500);
-        handler.postDelayed(WATCHDOG, 7000);
+        handler.postDelayed(WATCHDOG, WATCHDOG_MS);
     }
 
     private static SharedPreferences prefs() {
@@ -113,6 +116,23 @@ public class PhoneHook implements IXposedHookLoadPackage {
         if (h != null) { h.removeCallbacks(SYNC); h.postDelayed(SYNC, delay); }
     }
 
+    private static void retry(String reason) {
+        lastStatus = reason;
+        Handler h = handler;
+        if (h == null || !prefs().getBoolean("enabled", true)) return;
+        long delay = BACKOFF_MS[Math.min(failures, BACKOFF_MS.length - 1)];
+        failures = Math.min(failures + 1, BACKOFF_MS.length - 1);
+        // One retry at a time. Never queue a second worker or use a busy loop.
+        schedule(delay);
+    }
+
+    private static String backupKey(SubscriptionInfo si) {
+        // SubIds may be recycled. Include card identity and slot so that a
+        // replaced SIM is never restored using a previous card's backup.
+        return "backup_slot" + si.getSimSlotIndex() + "_card" + si.getCardId()
+                + "_sub" + si.getSubscriptionId();
+    }
+
     private static void apply(boolean restore) {
         if (app == null) return;
         try {
@@ -122,83 +142,91 @@ public class PhoneHook implements IXposedHookLoadPackage {
             }
             SubscriptionManager sm = app.getSystemService(SubscriptionManager.class);
             TelephonyManager base = app.getSystemService(TelephonyManager.class);
-            if (sm == null || base == null) { lastStatus = "系统电话服务未就绪，稍后重试"; schedule(RETRY_MS); return; }
+            if (sm == null || base == null) {
+                if (!restore) retry("电话服务尚未就绪，等待重试");
+                return;
+            }
             List<SubscriptionInfo> subs = sm.getActiveSubscriptionInfoList();
-            if (subs == null || subs.size() == 0) { lastStatus = "没有活动 SIM 卡，稍后重试"; schedule(RETRY_MS); return; }
+            if (subs == null || subs.isEmpty()) {
+                if (!restore) retry("SIM 订阅尚未就绪，等待重试");
+                return;
+            }
             int defaultId = SubscriptionManager.getDefaultDataSubscriptionId();
-            if (!restore && !SubscriptionManager.isValidSubscriptionId(defaultId)) {
-                lastStatus = "默认数据卡尚未就绪，稍后重试"; schedule(RETRY_MS); return;
+            SubscriptionInfo primary = null;
+            for (SubscriptionInfo si : subs) {
+                if (si.getSimSlotIndex() >= 0 && si.getSubscriptionId() == defaultId) primary = si;
+            }
+            if (!restore && (primary == null || !SubscriptionManager.isValidSubscriptionId(defaultId))) {
+                retry("默认数据卡尚未稳定，等待重试"); return;
+            }
+
+            StringBuilder report = new StringBuilder("defaultDataSubId=").append(defaultId).append('\n');
+            int changed = 0;
+            // Always protect the newest default-data SIM first, then constrain others.
+            for (int pass = 0; pass < (restore ? 1 : 2); pass++) {
+                for (SubscriptionInfo si : subs) {
+                    int id = si.getSubscriptionId();
+                    int slot = si.getSimSlotIndex();
+                    if (slot < 0) continue;
+                    if (!restore && ((pass == 0) != (id == defaultId))) continue;
+                    if (!restore && SubscriptionManager.getDefaultDataSubscriptionId() != defaultId) {
+                        schedule(750);
+                        lastStatus = "默认数据卡切换中，已取消旧同步任务";
+                        return;
+                    }
+                    TelephonyManager tm = base.createForSubscriptionId(id);
+                    long current = tm.getAllowedNetworkTypesForReason(USER);
+                    String key = backupKey(si);
+                    long target;
+                    if (restore) {
+                        if (!p.contains(key)) {
+                            report.append("slot").append(slot).append(": 没有匹配此卡的原始备份\n");
+                            continue;
+                        }
+                        target = p.getLong(key, current);
+                    } else {
+                        // Only modify the NR bit; preserve all other user-selected RATs.
+                        target = id == defaultId ? current | NR : current & ~NR;
+                    }
+                    if (current != target) {
+                        if (!restore && !p.contains(key)) {
+                            // Persist backup BEFORE first modification, so a phone-process
+                            // crash cannot lose the original setting.
+                            if (!p.edit().putLong(key, current).commit())
+                                throw new IllegalStateException("保存原始网络模式失败，未修改");
+                        }
+                        tm.setAllowedNetworkTypesForReason(USER, target);
+                        long verified = tm.getAllowedNetworkTypesForReason(USER);
+                        if ((verified & NR) != (target & NR)) {
+                            throw new IllegalStateException("slot " + slot + " NR 位写入后校验失败");
+                        }
+                        changed++;
+                    }
+                    report.append("slot").append(slot).append(" subId=").append(id)
+                          .append(" ").append((target & NR) != 0 ? "5G允许" : "4G优先")
+                          .append(current != target ? " 已更新" : " 无需修改").append('\n');
+                }
+            }
+            if (!restore && SubscriptionManager.getDefaultDataSubscriptionId() != defaultId) {
+                schedule(750);
+                lastStatus = "同步期间默认数据卡变化，正在重新校验";
+                return;
             }
             if (!restore) {
-                boolean foundDefault = false;
-                for (SubscriptionInfo si : subs) {
-                    if (si.getSubscriptionId() == defaultId && si.getSimSlotIndex() >= 0) {
-                        foundDefault = true; break;
-                    }
-                }
-                if (!foundDefault) {
-                    lastStatus = "默认上网卡还未出现在活动卡列表，稍后重试";
-                    schedule(RETRY_MS);
-                    return;
-                }
+                failures = 0;
+                handler.removeCallbacks(SYNC);
+                // Recheck after vendor/RIL asynchronous state propagation.
+                // This is not an immediate additional write loop.
+                if (changed > 0) schedule(1800);
             }
-            StringBuilder report = new StringBuilder();
-            report.append("defaultDataSubId=").append(defaultId).append('\n');
-            SharedPreferences.Editor editor = p.edit();
-            int changed = 0;
-            for (SubscriptionInfo si : subs) {
-                int id = si.getSubscriptionId();
-                int slot = si.getSimSlotIndex();
-                if (slot < 0) continue;
-                // Default data SIM might change mid-reconciliation; never apply
-                // an old default-to-secondary mapping to the new default SIM.
-                if (!restore && SubscriptionManager.getDefaultDataSubscriptionId() != defaultId) {
-                    lastStatus = "默认上网卡切换中，重新校验";
-                    schedule(1200);
-                    return;
-                }
-                TelephonyManager tm = base.createForSubscriptionId(id);
-                long current = tm.getAllowedNetworkTypesForReason(USER);
-                String key = "backup_" + id;
-                if (!p.contains(key)) editor.putLong(key, current);
-                long target;
-                if (restore) {
-                    if (!p.contains(key)) { report.append("slot").append(slot).append(": 无备份\n"); continue; }
-                    target = p.getLong(key, current);
-                } else {
-                    target = id == defaultId ? (current | NR) : (current & ~NR);
-                }
-                if (current != target) {
-                    tm.setAllowedNetworkTypesForReason(USER, target);
-                    long verified = tm.getAllowedNetworkTypesForReason(USER);
-                    if (verified != target) {
-                        schedule(RETRY_MS);
-                        throw new IllegalStateException("slot " + slot + " 写入未生效，稍后重试");
-                    }
-                    changed++;
-                }
-                report.append("slot").append(slot).append(" subId=").append(id)
-                      .append(" ").append((target & NR) != 0 ? "5G允许" : "4G优先")
-                      .append(current != target ? " 已更新" : " 无需修改").append('\n');
-            }
-            editor.apply();
-            if (!restore && SubscriptionManager.getDefaultDataSubscriptionId() != defaultId) {
-                schedule(1200);
-                report.append("默认上网卡已变化，正在重新校验\n");
-            }
-            if (restore) report.append("已尝试恢复首次接管时备份的模式；自动切换已停用\n");
+            if (restore) report.append("已恢复匹配 SIM 的备份，自动策略已停用\n");
             report.append("修改次数=").append(changed);
             lastStatus = report.toString();
-            // Avoid spamming LSPosed logs every watchdog tick.
-            if (changed > 0 || restore) XposedBridge.log("Dual5G v0.6.1 reconcile: " + lastStatus);
-        } catch (SecurityException e) {
-            lastStatus = "权限不足：电话进程 API 被 ROM 拒绝: " + e;
-            schedule(5000);
-            XposedBridge.log("Dual5G permission failure " + e);
+            if (changed > 0 || restore) XposedBridge.log("Dual5G v0.6.2 reconcile: " + lastStatus);
         } catch (Throwable e) {
-            lastStatus = "同步失败: " + e;
-            schedule(5000);
-            XposedBridge.log("Dual5G apply failure " + e);
+            if (!restore) retry("同步失败，退避重试: " + e.getClass().getSimpleName());
+            else lastStatus = "恢复失败: " + e;
+            XposedBridge.log("Dual5G v0.6.2 apply error: " + e);
         }
     }
 
